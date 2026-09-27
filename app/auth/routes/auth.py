@@ -1,32 +1,45 @@
-from fastapi import APIRouter, status, HTTPException
-from pymongo.errors import DuplicateKeyError
+import logging
+from typing import Annotated
 
-from auth.database import user_collections
-from auth.schema import UserCreate, UserLogin, UserOut
-from auth.security import hash_password, verify_password
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.auth.models import Users
+from app.auth.schema import UserCreate, UserOut
+from app.auth.security import hash_password
+from app.database import get_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-@router.post('/register', response_model=UserOut, status_code=status.HTTP_201_CREATED)
-async def register_user(payload: UserCreate):
-    user_details = {
-        "email": payload.email.lower(),
-        "password": hash_password(payload.password)
-    }
+logger = logging.getLogger(__name__)
+
+@router.post("/register", response_model = UserOut, status_code=status.HTTP_201_CREATED)
+def register_user(payload: UserCreate, db: Annotated[Session, Depends(get_db)]):
+    user_email =  (payload.email).lower()
+    user_password = payload.password
+    hashed_password = hash_password(user_password)
 
     try:
-        user_doc = await user_collections.insert_one(user_details)
-    except DuplicateKeyError:
-        raise HTTPException(
-            status_code = status.HTTP_409_CONFLICT,
-            detail = "AN account with this email exists"
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Something unexpected happens, please try again"
+        user_details = Users(
+            email =  user_email,
+            password_hash = hashed_password
         )
 
-    return {
-        "id": str(user_doc.inserted_id),
-        "email": user_details["email"]
-    }
+        db.add(user_details)
+        db.commit()
+        db.refresh(user_details)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists"
+        ) from error
+    except Exception as error:
+        db.rollback()
+        logger.exception("Unexpected error during user registration")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        ) from error
+
+    return user_details
+
