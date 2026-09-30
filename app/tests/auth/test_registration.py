@@ -112,3 +112,51 @@ def test_valid_token_returns_correct_profile(
 
     assert "password" not in profile_data
     assert "password_hash" not in profile_data
+
+def test_duplicate_email(client: TestClient):
+    email = "TEST@SAMPLE.COM"
+    password = "SelectedPassword1"
+
+    registration_response = client.post('/auth/register',
+        json = {
+            "email": email,
+            "password": password
+        }                                
+    )
+
+    assert registration_response.status_code == status.HTTP_201_CREATED
+
+    duplicate_response = client.post("/auth/register", 
+        json = {
+            "email": email,
+            "password": password
+        }
+    )
+
+    assert duplicate_response.status_code == status.HTTP_409_CONFLICT 
+
+def test_invalid_email(client: TestClient):
+    email = "abcd"
+    password = "SelectedPassword1"
+
+    registration_response = client.post('/auth/register',
+        json = {
+            "email": email,
+            "password": password
+        }
+    )
+
+    assert registration_response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+def test_weak_password(client: TestClient):
+    email = "TEST@SAMPLE.COM"
+    password = "Select"
+
+    response = client.post('/auth/register', 
+        json = {
+            "email": email,
+            "password": password
+        }                       
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT 
