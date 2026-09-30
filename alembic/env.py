@@ -3,6 +3,7 @@ from logging.config import fileConfig
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, pool
+from sqlalchemy.engine import make_url
 
 from alembic import context
 from app.database.base import Base
@@ -16,9 +17,23 @@ load_dotenv()
 
 
 def get_database_url() -> str:
-    url = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+    arguments = context.get_x_argument(as_dictionary=True)
+    environment = arguments.get("environment", "development")
+
+    if environment == "test":
+        url = os.getenv("TEST_DATABASE_URL")
+        variable_name = "TEST_DATABASE_URL"
+        if make_url(url).database != "contextvault_test":
+            raise RuntimeError("Test migration must target contextvault_test")
+    elif environment == "development":
+        url = os.getenv("DATABASE_URL")
+        variable_name = "DATABASE_URL"
+    else:
+        raise RuntimeError(f"Unsupported migration environment {environment}")
+
     if not url:
-        raise RuntimeError("DATABASE_URL is not configured")
+        raise RuntimeError(f"{variable_name} is not configured")
+
     return url
 
 # Interpret the config file for Python logging.
