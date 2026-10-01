@@ -160,3 +160,64 @@ def test_weak_password(client: TestClient):
     )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT 
+
+def test_incorrect_password(client: TestClient):
+    email = 'TEST@SAMPLE.COM'
+    password = 'SelectedPassword1'
+
+    response = client.post('/auth/register',
+        json = {
+            "email": email,
+            "password": password
+        }
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED 
+
+    login_response = client.post('/auth/login',
+        data = {
+            "username": email,
+            "password": "SelectedPassword2"
+        }
+    )
+
+    assert login_response.status_code == status.HTTP_401_UNAUTHORIZED
+
+def test_missing_token(client: TestClient):
+    missing_token_response = client.get('/auth/profile')
+
+    assert missing_token_response.status_code == status.HTTP_401_UNAUTHORIZED
+
+def test_tampered_token(client: TestClient):
+    email = "TEST@SAMPLE.COM"
+    password = "SelectedPassword1"
+
+    register = client.post(
+        '/auth/register',
+        json = {
+            "email": email,
+            "password": password
+        }
+    )
+
+    login_response = client.post(
+        '/auth/login',
+        data = {
+            "username": email,
+            "password": password
+        }
+    )
+
+    login_response_body = login_response.json()
+
+    access_token = login_response_body["access_token"]
+    access_token += 'a'
+
+    profile_response = client.get(
+        '/auth/profile',
+        headers={
+            "Authorization": f"Bearer {access_token}"
+        }
+    )
+
+    assert profile_response.status_code == status.HTTP_401_UNAUTHORIZED
