@@ -7,6 +7,7 @@ from sqlalchemy.engine import make_url
 
 from alembic import context
 from app.database.base import Base
+from app.models.documents import Document
 
 target_metadata = Base.metadata
 
