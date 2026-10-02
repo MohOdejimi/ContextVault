@@ -12,6 +12,7 @@ from app.models.documents import Document
 from app.auth.routes import get_current_user
 from app.database import get_db
 from app.auth.models import User
+from app.schema import Document_Response
 
 router = APIRouter(tags=["File Upload"])
 logger = logging.Logger(__name__)
@@ -33,7 +34,7 @@ parent_dir = Path(__file__).resolve().parent
 uploads_dir = parent_dir / "upload"
 uploads_dir.mkdir(exist_ok=True)
 
-@router.post('/document', status_code = status.HTTP_201_CREATED)
+@router.post('/document', response_model= Document_Response, status_code = status.HTTP_201_CREATED)
 async def upload_document(
     db: Annotated[Session, Depends(get_db)], current_user: Annotated[User, Depends(get_current_user)], file: UploadFile = File(...)):
 
@@ -89,13 +90,13 @@ async def upload_document(
             detail = "File storage failed",
             status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+    except HTTPException:
+        raise 
     except Exception as error:
         raise HTTPException(
             detail=f"Server Error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         ) from error
-    except HTTPException:
-        raise 
     finally:
         if not uploaded and dest.exists():
             dest.unlink()
@@ -114,12 +115,16 @@ async def upload_document(
     except Exception as error:
         db.rollback()
         logger.exception("Unexpected error during file upload")
+        try:
+            if dest.exists():
+                dest.unlink()
+        except OSError:
+            logger.log(
+                "Failed to clean up stored file after database failure"
+            )
         raise HTTPException(
             detail="Server Error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
     
-    return {
-        "filename": filename,
-        "content_type": content_type
-    }
+    return doc_details
