@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends,  HTTPException, status,  File, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import select, delete
 
 from app.models.documents import Document
 from app.auth.routes import get_current_user
@@ -34,7 +35,7 @@ parent_dir = Path(__file__).resolve().parent
 uploads_dir = parent_dir / "upload"
 uploads_dir.mkdir(exist_ok=True)
 
-@router.post('/document', response_model= Document_Response, status_code = status.HTTP_201_CREATED)
+@router.post('/document', response_model = Document_Response, status_code = status.HTTP_201_CREATED)
 async def upload_document(
     db: Annotated[Session, Depends(get_db)], current_user: Annotated[User, Depends(get_current_user)], file: UploadFile = File(...)):
 
@@ -128,3 +129,99 @@ async def upload_document(
         )
     
     return doc_details
+
+@router.get('/documents/{doc_id}', response_model = Document_Response, status_code = status.HTTP_200_OK)
+def get_document(
+    doc_id: int,
+    db: Annotated[Session, Depends(get_db)], 
+    current_user: Annotated[User, Depends(get_current_user)], 
+    ):
+    document = db.scalar(select(Document).where((Document.id == doc_id) & (current_user.id == Document.user_id)))
+    if not document:
+        raise HTTPException(
+            detail="Unrecognised Document ID",
+            status_code = status.HTTP_404_NOT_FOUND
+        )
+
+    return document
+
+@router.get('/documents', response_model = list[Document_Response], status_code = status.HTTP_200_OK)
+def get_user_documents(db: Annotated[Session, Depends(get_db)], current_user: Annotated[User, Depends(get_current_user)]):
+    stmt = select(Document).where(Document.user_id == current_user.id)
+    documents = db.execute(stmt).scalars().all()
+
+    return documents
+
+@router.get('/documents/download/{doc_id}', status_code = status.HTTP_200_OK)
+def download_document(
+    doc_id: int,
+    db: Annotated[Session, Depends(get_db)], 
+    current_user: Annotated[User, Depends(get_current_user)], 
+    ):
+    document = db.scalar(select(Document).where((Document.id == doc_id) & (Document.user_id == current_user.id)))
+    if not document:
+        raise HTTPException(
+            detail="Document not found on server",
+            status_code = status.HTTP_404_NOT_FOUND
+        )
+    
+    file_path = Path(uploads_dir / document.stored_filename)
+    if not file_path.exists():
+        raise HTTPException(
+            detail="File not found on server",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+    return FileResponse(
+        path=file_path,
+        media_type=document.content_type,
+        filename=document.original_filename
+    )
+
+@router.delete("/documents/{doc_id}", status_code=status.HTTP_200_OK)
+def delete_user_document(
+    doc_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+
+    document = db.scalar(
+        select(Document).where(
+            Document.id == doc_id,
+            Document.user_id == current_user.id,
+        )
+    )
+
+    if not document:
+        raise HTTPException(
+            detail="Document not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    stored_file = uploads_dir / document.stored_filename
+
+    try:
+        db.delete(document)
+        db.commit()
+
+    except Exception as error:
+        db.rollback()
+        logger.exception("Database error while deleting document")
+
+        raise HTTPException(
+            detail="Failed to delete document",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ) from error
+
+    try:
+        if stored_file.exists():
+            stored_file.unlink()
+
+    except OSError:
+        logger.exception(
+            "Document metadata was deleted, but stored file cleanup failed"
+        )
+
+    return {
+        "detail": "Document deleted successfully"
+    }
