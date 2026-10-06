@@ -5,12 +5,11 @@ import boto3
 
 from typing import Annotated
 from io import BytesIO
-from pathlib import Path
 from fastapi import APIRouter, Depends,  HTTPException, status,  File, UploadFile
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import select, delete
-from botocore.exceptions import ClientError
+from sqlalchemy import select
+from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
 
 from app.models.documents import Document
 from app.auth.routes import get_current_user
@@ -18,10 +17,10 @@ from app.database import get_db
 from app.auth.models import User
 from app.schema import Document_Response
 from app.storage.s3 import get_s3_client
-from app.config import S3_BUCKET_NAME, S3_REGION_NAME
+from app.config import S3_BUCKET_NAME
 
 router = APIRouter(tags=["File Upload"])
-logger = logging.Logger(__name__)
+logger = logging.getLogger(__name__)
 
 supported_extensions = {".pdf", ".docx", ".txt", ".md"}
 mime_validation_map = {
@@ -68,7 +67,6 @@ async def upload_document(
     buffer = BytesIO()
     key = stored_filename
 
-    uploaded = False
     try: 
         while chunk := await file.read(chunk_size):
             file_size += len(chunk)
@@ -89,25 +87,23 @@ async def upload_document(
             bucket_name, 
             key,
             ExtraArgs={"ContentType": content_type})
-        uploaded = True
-    except PermissionError as error:
+    except NoCredentialsError as error:
         raise HTTPException(
-            detail="File storage failed",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-    except OSError as error:
-        raise HTTPException(
-            detail = "File storage failed",
-            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-    except HTTPException:
-        raise 
-    except Exception as error:
-        raise HTTPException(
-            detail=f"Server Error",
+            detail="File storage failed: AWS credentials not found",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         ) from error
-
+    except PartialCredentialsError as error:
+        raise HTTPException(
+            detail="File storage failed: Incomplete AWS credentials",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        ) from error
+    except ClientError as error:
+        aws_error = error.response.get("Error", {})
+        raise HTTPException(
+            detail=aws_error.get("Message", "File storage failed"),
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ) from error
+    
     try:
         doc_details =  Document(
             original_filename = filename,
@@ -119,34 +115,14 @@ async def upload_document(
         db.add(doc_details)
         db.commit()
         db.refresh(doc_details)
-    except Exception as error:
+    except Exception as db_error:
         db.rollback()
-        logger.exception("Unexpected error during file upload")
+        logger.exception("Unexpected error during DB storage")
         try:
-            s3_client.head_object(Bucket=bucket_name, Key=key)
+            s3_client.delete_object(Bucket=bucket_name, Key=key)
+            logger.info(f"Deleted file '{key}' from S3 bucket '{bucket_name}'")
         except ClientError as error:
-            code = error.response['Error']['Code']
-            if code == '404':
-                raise HTTPException(
-                    detail="Client Error",
-                    status_code=status.HTTP_404_NOT_FOUND
-                )
-            else:
-                logger.error(f"Error checking file '{key}' in S3 bucket '{bucket_name}': {error}")
-                raise HTTPException(
-                    detail="Server Error",
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-        else:
-            try:
-                s3_client.delete_object(Bucket=bucket_name, Key=key)
-                logger.info(f"Deleted file '{key}' from S3 bucket '{bucket_name}'")
-            except ClientError as error:
-                logger.error(f"Failed to delete file '{key}' from S3 bucket '{bucket_name}': {error}")
-                raise HTTPException(
-                    detail="Server Error",
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
+            logger.error(f"Failed to delete file '{key}' from S3 bucket '{bucket_name}': {error}")
         raise HTTPException(
             detail="Server Error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -205,12 +181,22 @@ def download_document(
     try:
         s3_client.head_object(Bucket=S3_BUCKET_NAME, Key=document.stored_filename)
     except ClientError as error:
-        code = error.response['Error']['Code']
-        if code == '404':
+        error_info = error.response.get("Error", {})
+        error_code = error_info.get("Code")
+        http_status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if error_code in {"404", "NoSuchKey", "NotFound"} or (
+            http_status == status.HTTP_404_NOT_FOUND
+            and error_code != "NoSuchBucket"
+        ):
             raise HTTPException(
                 detail=f"File '{document.stored_filename}' not found",
                 status_code=status.HTTP_404_NOT_FOUND
-            )
+            ) from error
+        logger.exception("Failed to check document in S3")
+        raise HTTPException(
+            detail="Unable to verify document in storage",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ) from error
 
     url = generate_presigned_url(
         s3_client,
@@ -257,18 +243,9 @@ def delete_user_document(
         ) from error
 
     try:
-        s3_client.head_object(Bucket=S3_BUCKET_NAME, Key=document_key)
-    except ClientError as e:
-        code = e.response['Error']['Code']
-
-        if code == 404:
-            raise HTTPException(
-                status_code = status.HTTP_404_NOT_FOUND,
-                detail=f"File Document is not found"
-            )
-    else:
         s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=document_key)
-
+    except ClientError as e:
+        logger.exception(f"Failed to delete document from S3")
 
     return {
         "detail": "Document deleted successfully"
