@@ -158,3 +158,21 @@ def test_get_documents(client: TestClient):
     )
 
     assert get_docs_response.status_code == status.HTTP_200_OK
+
+def test_delete_user_document(client: TestClient):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client, email, password)
+
+    with open(test_doc_file, "rb") as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files={
+                "file": (test_doc_file.name, f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            }
+        )
+
+    id = response.json()["id"]
+
+    delete_doc_response = client.delete(f'/documents/{id}', headers={"Authorization": f"Bearer {token}"})
+
+    assert delete_doc_response.status_code == status.HTTP_200_OK
