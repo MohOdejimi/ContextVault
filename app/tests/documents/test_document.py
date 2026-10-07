@@ -3,11 +3,15 @@ from pathlib import Path
 from fastapi import status
 from fastapi.testclient import TestClient
 
-from app.routes.documents import uploads_dir
+
+
+uploads_dir = Path(__file__).resolve().parents[2] / "upload"
 
 test_pdf_file = Path(uploads_dir) / "test.pdf"
 test_doc_file = Path(uploads_dir) / "test.docx"
-test_txt_file = Path(uploads_dir) / "@startuml.txt"
+test_txt_file = Path(uploads_dir) / "test.txt"
+test_md_file = Path(uploads_dir) / "test.md"
+test_yml_file = Path(uploads_dir) / "test.yaml"
 
 
 def user_registration_helper(client: TestClient):
@@ -44,18 +48,15 @@ def test_safe_pdf_upload(client: TestClient):
 
     assert response.status_code == status.HTTP_201_CREATED
 
-def test_safe_docx_upload(client: TestClient):
+def test_safe_md_download(client: TestClient):
     email, password = user_registration_helper(client)
     token = user_login_helper(client, email, password)
 
-    with open(test_doc_file, "rb") as f:
-        response = client.post("/document",
+    with open(test_md_file, "rb") as f:
+        response = client.post('/document', 
             headers={"Authorization": f"Bearer {token}"},
             files={
-                "file": (test_doc_file.name, f,  (
-                "application/vnd.openxmlformats-officedocument."
-                "wordprocessingml.document"
-            ))
+                "file": (test_md_file.name, f, "text/markdown")
             }
         )
 
@@ -74,7 +75,38 @@ def test_safe_txt_upload(client: TestClient):
             }
         )
 
+    assert response.status_code == status.HTTP_201_CREATED  
+
+def test_safe_docx_upload(client: TestClient):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client, email, password)
+
+    with open(test_doc_file, "rb") as f:
+        response = client.post("/document",
+            headers={"Authorization": f"Bearer {token}"},
+            files={
+                "file": (test_doc_file.name, f,  (
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ))
+            }
+        )
+
     assert response.status_code == status.HTTP_201_CREATED
+
+def test_unsupported_extension(client: TestClient):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client, email, password)
+
+    with open(test_yml_file, "rb") as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files = {
+                "file": (test_yml_file.name, f, "application/yaml")
+            }
+        )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
 def test_get_pdf_file_by_id(client: TestClient):

@@ -38,7 +38,11 @@ chunk_size = 1024 * 1024
 
 @router.post('/document', response_model = Document_Response, status_code = status.HTTP_201_CREATED)
 async def upload_document(
-    db: Annotated[Session, Depends(get_db)], current_user: Annotated[User, Depends(get_current_user)], s3_client: Annotated[boto3.client, Depends(get_s3_client)],file: UploadFile = File(...)):
+    db: Annotated[Session, Depends(get_db)], 
+    current_user: Annotated[User, Depends(get_current_user)], 
+    s3_client: Annotated[boto3.client, Depends(get_s3_client)], 
+    file: UploadFile = File(...)
+    ):
 
     filename = file.filename
     
