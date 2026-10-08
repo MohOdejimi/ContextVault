@@ -1,3 +1,7 @@
+import os
+
+os.environ["S3_BUCKET_NAME"] = "contextvault-test-uploads"
+
 import pytest
 import boto3
 
@@ -33,6 +37,7 @@ TestSessionLocal = sessionmaker(
     autoflush=False
 )
 
+
 def override_get_db() -> Generator[Session, None, None]:
     db: Session = TestSessionLocal()
     try:
@@ -51,11 +56,11 @@ def aws(aws_credentials):
     with mock_aws():
         yield
 
+
 @pytest.fixture
-def mock_s3_client(aws, monkeypatch) -> Generator[boto3.client, None, None]:
+def mock_s3_client(aws) -> Generator[boto3.client, None, None]:
     s3_client = boto3.client('s3', region_name=AWS_DEFAULT_REGION)
-    s3_client.create_bucket(Bucket="contextvault-test-uploads")
-    monkeypatch.setenv("S3_BUCKET_NAME", "contextvault-test-uploads")
+    s3_client.create_bucket(Bucket=os.getenv("S3_BUCKET_NAME"))
     yield s3_client
     s3_client.close()
 
