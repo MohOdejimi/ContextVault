@@ -3,9 +3,10 @@ import boto3
 
 from pathlib import Path
 
-from fastapi import status
+from fastapi import status, HTTPException
 from fastapi.testclient import TestClient
 from botocore.exceptions import ClientError
+from sqlalchemy.orm import Session
 
 uploads_dir = Path(__file__).resolve().parents[2] / "upload"
 
@@ -463,3 +464,65 @@ def test_download_another_user_document(client: TestClient):
     )
 
     assert download_response.status_code == status.HTTP_404_NOT_FOUND
+
+def test_db_failure_after_s3_upload_removes_object(
+    client: TestClient,
+    mock_s3_client: boto3.client,
+    monkeypatch,
+):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client, email, password)
+
+    def fail_commit(_session: Session) -> None:
+        raise HTTPException("Simulated DB failure")
+
+    with monkeypatch.context() as request_patch:
+        request_patch.setattr(Session, "commit", fail_commit)
+
+        with open(test_pdf_file, "rb") as f:
+            response = client.post(
+                "/document",
+                headers={"Authorization": f"Bearer {token}"},
+                files={"file": (test_pdf_file.name, f, "application/pdf")},
+            )
+
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert mock_s3_client.list_objects_v2(Bucket=bucket).get("Contents", []) == []
+
+def test_s3_cleanup_failure_after_committed_delete(
+    client: TestClient,
+    mock_s3_client: boto3.client,
+    monkeypatch,
+    caplog,
+):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client, email, password)
+
+    with open(test_pdf_file, "rb") as f:
+        response = client.post('/document',
+            headers = {
+                "Authorization": f"Bearer {token}"
+            },
+            files = {
+                "file": (test_pdf_file.name, f, "application/pdf")
+            }
+        )
+
+    id = response.json()["id"]
+
+    def fail_cleanup(**_kwargs) -> None:
+        raise ClientError(
+            {"Error": {"Code": "InternalError", "Message": "Failed cleanup operation"}},
+            "DeleteObject",
+        )
+
+    with monkeypatch.context() as request_patch:
+        request_patch.setattr(mock_s3_client, "delete_object", fail_cleanup)
+
+        response = client.delete(
+            f"/documents/{id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert "Failed to delete document from S3" in caplog.text
