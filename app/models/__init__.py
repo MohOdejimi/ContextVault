@@ -1,3 +1,4 @@
 from .documents import Document
+from .ingestion import IngestionJobStatus
 
-__all__ = ["Document"]
+__all__ = ["Document", "IngestionJobStatus"]
