@@ -7,6 +7,10 @@ from fastapi import status, HTTPException
 from fastapi.testclient import TestClient
 from botocore.exceptions import ClientError
 from sqlalchemy.orm import Session
+from sqlalchemy import select
+from app.models.documents import Document
+from app.models.ingestion import IngestionJob, IngestionJobStatus
+from app.auth.models import User
 
 uploads_dir = Path(__file__).resolve().parents[2] / "upload"
 
@@ -76,7 +80,7 @@ def get_user_id(client: TestClient):
 
     return id 
 
-def test_safe_pdf_upload(client: TestClient):
+def test_safe_pdf_upload(client: TestClient, db_session: Session):
     email, password = user_registration_helper(client)
     token = user_login_helper(client, email, password)
 
@@ -89,6 +93,34 @@ def test_safe_pdf_upload(client: TestClient):
         )
 
     assert response.status_code == status.HTTP_201_CREATED
+
+    user = db_session.scalar(
+        select(User).where(
+            User.email == email.lower()
+        )
+    )
+    assert user is not None
+
+    document = db_session.scalar(
+        select(Document).where(
+            Document.user_id == user.id
+        )
+    )
+    assert document is not None 
+
+    ingestion_job = db_session.scalar(
+        select(IngestionJob).where(
+            IngestionJob.document_id == document.id
+        )
+    )
+    assert ingestion_job is not None
+    assert ingestion_job.document_id == document.id
+    assert ingestion_job.status == IngestionJobStatus.PENDING
+    assert ingestion_job.attempt_count == 0
+    assert ingestion_job.max_attempts == 3
+    assert ingestion_job.claim_token is None
+    assert ingestion_job.lease_expires_at is None
+        
 
 def test_safe_md_download(client: TestClient):
     email, password = user_registration_helper(client)
@@ -526,3 +558,25 @@ def test_s3_cleanup_failure_after_committed_delete(
 
     assert response.status_code == status.HTTP_200_OK
     assert "Failed to delete document from S3" in caplog.text
+
+def test_insertion_job_transaction_failure_test(
+        client: TestClient,
+        monkeypatch,
+):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client, email, password)
+
+    def failed_insertion_job_commit(_session: Session) -> None:
+        raise HTTPException("Simulated Insertion job failure")
+
+    with monkeypatch.context() as request_patch:
+        request_patch.setattr(Session, "commit", failed_insertion_job_commit)
+
+        with open(test_pdf_file, "rb") as f:
+            response = client.post(
+                "/document",
+                headers={"Authorization": f"Bearer {token}"},
+                files={"file": (test_pdf_file.name, f, "application/pdf")},
+            )
+
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR

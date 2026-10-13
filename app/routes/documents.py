@@ -12,6 +12,7 @@ from sqlalchemy import select
 from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
 
 from app.models.documents import Document
+from app.models.ingestion import IngestionJob
 from app.auth.routes import get_current_user
 from app.database import get_db
 from app.auth.models import User
@@ -117,8 +118,12 @@ async def upload_document(
             size_in_bytes =  file_size, 
         )
         db.add(doc_details)
+        db.flush()
+        ingestion_job = IngestionJob(
+            document_id = doc_details.id
+        )
+        db.add(ingestion_job)
         db.commit()
-        db.refresh(doc_details)
     except Exception as db_error:
         db.rollback()
         logger.exception("Unexpected error during DB storage")

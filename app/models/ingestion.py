@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum as Pyenum 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Enum, CheckConstraint, DateTime, Index, text, column
+from sqlalchemy import ForeignKey, Enum, CheckConstraint, DateTime, Index, text
 from sqlalchemy.orm import Mapped, relationship, mapped_column
 from sqlalchemy.sql import func
 
