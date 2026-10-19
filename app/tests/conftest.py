@@ -5,15 +5,13 @@ os.environ["S3_BUCKET_NAME"] = "contextvault-test-uploads"
 import pytest
 import boto3
 
-from sqlalchemy import create_engine, delete
-from sqlalchemy.orm import Session, sessionmaker 
+from sqlalchemy import delete
+from sqlalchemy.orm import Session
 from collections.abc import Generator 
 from fastapi.testclient import TestClient
-from typing import Annotated
 from moto import mock_aws
 
 from app.config import (
-    TEST_DATABASE_URL,
     AWS_ACCESS_KEY_ID,
     AWS_SECRET_ACCESS_KEY,
     AWS_DEFAULT_REGION,
@@ -22,20 +20,7 @@ from app.database import get_db as production_get_db
 from app.auth.models import User 
 from app.storage.s3 import get_s3_client as production_s3_client
 from app.main import app 
-
-if not TEST_DATABASE_URL:
-    raise RuntimeError("TEST_DATABASE_URL is not configured")
-
-test_engine = create_engine(
-    TEST_DATABASE_URL,
-    pool_pre_ping=True
-)
-
-TestSessionLocal = sessionmaker(
-    bind=test_engine,
-    expire_on_commit=False,
-    autoflush=False
-)
+from app.tests.test_database import TestSessionLocal
 
 
 def override_get_db() -> Generator[Session, None, None]:

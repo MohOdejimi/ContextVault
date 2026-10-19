@@ -1,0 +1,128 @@
+from pathlib import Path
+
+from sqlalchemy.orm import Session
+from sqlalchemy import select, update
+from fastapi.testclient import TestClient
+from fastapi import status
+
+from app.workers.ingestion_worker import claim_one_job 
+from app.tests.test_database import TestSessionLocal
+from app.auth.models import User 
+from app.models import IngestionJob, Document, IngestionJobStatus
+
+
+uploads_dir = Path(__file__).resolve().parents[2] / "upload"
+
+test_pdf_file = Path(uploads_dir) / "test.pdf"
+
+def user_registration_helper(client: TestClient, email: str = "TEST@SAMPLE.COM"):
+    password = "Securepass2"
+
+    response = client.post(
+        "/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert response.status_code == status.HTTP_201_CREATED
+    return email, password
+
+def user_login_helper(client: TestClient, email: str, password: str) -> str:
+    response = client.post(
+        "/auth/login",
+        data={"username": email, "password": password},
+    )
+    assert response.status_code == status.HTTP_200_OK
+    return response.json()["access_token"]
+
+
+def test_empty_queue():
+    job = claim_one_job(session_factory = TestSessionLocal)
+
+    assert job is None
+
+def test_successful_claim(client: TestClient, db_session: Session):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client, email, password)
+
+    with open(test_pdf_file, 'rb') as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files = {
+                "file": (test_pdf_file.name, f, "application/pdf")
+            }
+        )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = db_session.scalar(
+        select(User)
+        .where(User.email == email.lower())
+    ) 
+
+    assert user is not None 
+
+    document = db_session.scalar(
+        select(Document)
+        .where(Document.user_id == user.id)
+    )
+
+    assert document is not None 
+
+    job = claim_one_job(TestSessionLocal)
+
+    assert job is not None
+
+    claimed_job = db_session.scalar(
+        select(IngestionJob)
+        .where(job.job_id == IngestionJob.id)
+    )
+
+    assert claimed_job is not None
+
+    assert claimed_job.status == IngestionJobStatus.PROCESSING
+    assert claimed_job.attempt_count == 1
+    assert claimed_job.claim_token != None
+    assert claimed_job.claim_token == job.claim_token
+    assert job.doc_id == document.id 
+
+
+def test_job_at_max_attempts_are_not_claimable(client: TestClient, db_session: Session):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client, email, password)
+
+    with open(test_pdf_file, 'rb') as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files = {
+                "file": (test_pdf_file.name, f, "application/pdf")
+            }
+        )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = db_session.scalar(
+        select(User)
+        .where(User.email == email.lower())
+    ) 
+
+    assert user is not None 
+
+    document = db_session.scalar(
+        select(Document)
+        .where(Document.user_id == user.id)
+    )
+
+    assert document is not None 
+
+    stmt = (
+        update(IngestionJob)
+        .where(IngestionJob.document_id == document.id)
+        .values(attempt_count = 3)
+    )
+
+    db_session.execute(stmt)
+    db_session.commit()
+
+    job = claim_one_job(TestSessionLocal)
+
+    assert job is None
+
