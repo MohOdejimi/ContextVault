@@ -1,10 +1,21 @@
 import uuid
+import boto3
+import logging
 
 from dataclasses import dataclass
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.exc import DatabaseError
 
 from app.services.ingestion_jobs import claim_pending_job
+from app.services.document_metadata import load_document
+from app.services.document_extraction import extract_document
+from app.storage.s3 import get_s3_client
 from app.database.connection import SessionLocal 
+from app.config import S3_BUCKET_NAME
+
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class JobData:
@@ -12,15 +23,13 @@ class JobData:
     doc_id: int 
     claim_token: uuid.UUID
 
-
-
 def claim_one_job(
         session_factory: sessionmaker[Session] = SessionLocal
 ):
     data = None
 
-    with session_factory.begin() as db:
-        job = claim_pending_job(db)
+    with session_factory.begin() as db_session:
+        job = claim_pending_job(db_session)
 
         if job is not None:
             data = JobData(
@@ -30,3 +39,47 @@ def claim_one_job(
             )
 
     return data
+
+
+@dataclass(frozen=True)
+class DocumentMeta:
+    id: int
+    s3_key: str
+    content_type: str
+    original_filename: str | None
+    document_size: int
+
+def load_document_metadata(doc_id: int, session_factory=SessionLocal) -> DocumentMeta:
+    with session_factory.begin() as db:
+        document = load_document(db, doc_id)
+        if document is None:
+            raise LookupError(f"document {doc_id} not found")
+        return DocumentMeta(
+            id=document.id,
+            s3_key=document.stored_filename,
+            content_type=document.content_type,
+            original_filename=document.original_filename,
+            document_size=document.size_in_bytes
+        )
+
+        
+def obtain_file_bytes(
+        object_key,
+    ):
+
+    try:
+        response = 
+
+        with response["Body"] as body:
+            raw_bytes = body.read()
+    except Exception:
+        pass
+
+
+
+
+
+    
+
+    
+    
