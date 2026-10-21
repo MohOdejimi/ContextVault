@@ -1,3 +1,5 @@
+import boto3
+
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -5,7 +7,7 @@ from sqlalchemy import select, update
 from fastapi.testclient import TestClient
 from fastapi import status
 
-from app.workers.ingestion_worker import claim_one_job 
+from app.workers.ingestion_worker import claim_one_job, load_document_metadata, obtain_file_bytes
 from app.tests.test_database import TestSessionLocal
 from app.auth.models import User 
 from app.models import IngestionJob, Document, IngestionJobStatus
@@ -125,4 +127,82 @@ def test_job_at_max_attempts_are_not_claimable(client: TestClient, db_session: S
     job = claim_one_job(TestSessionLocal)
 
     assert job is None
+
+def test_document_metadata_service(client: TestClient, db_session: Session):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client, email, password)
+
+    with open(test_pdf_file, 'rb') as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files = {
+                "file": (test_pdf_file.name, f, "application/pdf")
+            }
+        )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = db_session.scalar(
+        select(User)
+        .where(User.email == email.lower())
+    ) 
+
+    assert user is not None 
+
+    document = db_session.scalar(
+        select(Document)
+        .where(Document.user_id == user.id)
+    )
+
+    assert document is not None 
+
+    job = claim_one_job(TestSessionLocal)
+
+    document_metadata = load_document_metadata(job.doc_id, TestSessionLocal)
+
+    assert document is not None
+    assert document_metadata.original_filename == document.original_filename
+    assert document_metadata.s3_key == document.stored_filename
+    assert document_metadata.id == document.id
+    assert document_metadata.document_size == document.size_in_bytes
+    assert document_metadata.content_type == document.content_type
+
+def test_document_storage_service(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client, email, password)
+
+    with open(test_pdf_file, 'rb') as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files = {
+                "file": (test_pdf_file.name, f, "application/pdf")
+            }
+        )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = db_session.scalar(
+        select(User)
+        .where(User.email == email.lower())
+    ) 
+
+    assert user is not None 
+
+    document = db_session.scalar(
+        select(Document)
+        .where(Document.user_id == user.id)
+    )
+
+    assert document is not None 
+
+    job = claim_one_job(TestSessionLocal)
+    assert job is not None
+
+    document_metadata = load_document_metadata(job.doc_id, TestSessionLocal)
+    assert document_metadata is not None
+
+    file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
+
+    assert file_bytes is not None 
+    assert isinstance(file_bytes, bytes)
 

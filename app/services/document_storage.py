@@ -11,7 +11,7 @@ class ObjectNotFound(Exception):
 def get_raw_file_bytes(
         object_key: str,
         client = None
-):
+) -> bytes: 
     client = client or get_s3_client()
     try:
         response = client.get_object(Bucket=S3_BUCKET_NAME, Key=object_key)

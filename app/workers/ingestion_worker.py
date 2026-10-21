@@ -1,5 +1,4 @@
 import uuid
-import boto3
 import logging
 
 from dataclasses import dataclass
@@ -9,6 +8,7 @@ from sqlalchemy.exc import DatabaseError
 
 from app.services.ingestion_jobs import claim_pending_job
 from app.services.document_metadata import load_document
+from app.services.document_storage import get_raw_file_bytes
 from app.services.document_extraction import extract_document
 from app.storage.s3 import get_s3_client
 from app.database.connection import SessionLocal 
@@ -64,16 +64,15 @@ def load_document_metadata(doc_id: int, session_factory=SessionLocal) -> Documen
 
         
 def obtain_file_bytes(
-        object_key,
+        s3_key,
+        s3_client = None
     ):
-
     try:
-        response = 
-
-        with response["Body"] as body:
-            raw_bytes = body.read()
+        file_bytes = get_raw_file_bytes(s3_key, s3_client)
+        return file_bytes
     except Exception:
-        pass
+        logger.exception("Failed to obtain file bytes for %s", s3_key)
+        raise
 
 
 
