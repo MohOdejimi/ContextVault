@@ -10,12 +10,12 @@ from typing import Literal
 from dataclasses import dataclass
 from pymupdf import FileDataError
 
-mime_validation_map = {
+mime_validation_set = {
     "application/pdf",
     "text/plain",
     "text/markdown",
     (
-        "application/vnd.openxmlformats-officedocument.",
+        "application/vnd.openxmlformats-officedocument."
         "wordprocessingml.document"
     )
 }
@@ -54,6 +54,7 @@ class SourceLocation:
 class ExtractedSegment:
     text: str
     source_location: SourceLocation
+    origin_field: Literal["native_text", "ocr", "image_caption"]
 
 class UnsupportedDocumentTypeError(Exception):
     def __init__(self, message):
@@ -70,24 +71,65 @@ class EmptyDocumentError(Exception):
         self.message = message
         super().__init__(self.message)
 
+class OCRRequiredError(Exception):
+    def __init__(self, message):
+        self.message = message 
+        super().__init__(self.message)
+
+
+
 def pdf_parser(data: bytes):
     segments = []
     try:
         with pymupdf.open(stream=data, filetype="pdf") as doc:
             for page_number, page in enumerate(doc, start=1):
                 texts = []
+                page_rect = page.rect
+                page_area = page_rect.get_area()
+                text_chars = 0
                 for _, _, _, _, text, _ , _ in page.get_text("blocks", sort=True):
                     text = text.strip()
                     if not text:
                         continue
+                    text_chars += len(text)
                     texts.append(text)
+                
+                images_info = page.get_image_info()
+                for image_info in images_info:
+                    bbox = pymupdf.Rect(image_info["bbox"])
+                    placed_w, placed_h = bbox.width, bbox.height 
+                    img_area = bbox.get_area() / page_area 
+                    visible = bbox & page_rect 
+                    if visible.is_empty:
+                        continue 
+                    coverage = visible.get_area() / page_area
+
+                    if coverage >= 0.85 and text_chars <= 50:
+                        """raise OCRRequiredError(
+                            ""
+                        )"""
+                        #image covers 85 % area
+
+                    if coverage >= 0.25:
+                        #large image
+                        pass
+
+                    if coverage < 0.02:
+                        #small 
+                        pass
+
+                    if coverage <= 0.10:
+                        #icons 
+                        pass 
+
                 if len(texts) != 0:
                     segment = ExtractedSegment(
                         text = "\n\n".join(texts),
                         source_location=SourceLocation(
                             kind="page",
                             index=page_number
-                        )
+                        ),
+                        origin_field='native_text'
                     )
                     segments.append(segment)
         return segments 
@@ -101,47 +143,54 @@ def pdf_parser(data: bytes):
         raise
     except Exception:
         raise
+
+type_to_parser_map = {
+    "application/pdf": pdf_parser
+}
     
 def extract_document(data: bytes, metadata) -> list[ExtractedSegment]:
     size = metadata.document_size
     id = metadata.id 
     content_type = metadata.content_type
+    content_type = content_type.lower().strip()
     filename = metadata.original_filename
     _, file_extension = os.path.splitext(filename)
     file_extension = file_extension.lower()
 
-    if content_type not in mime_validation_map:
+    if content_type not in mime_validation_set:
         raise UnsupportedDocumentTypeError(
             f"Unsupported document type: {content_type} for document {id}"
         )
 
-    if size == 0:
+    if size == 0 or len(data) == 0:
         raise EmptyDocumentError(
             f"Document can't be empty"
         )
 
-    if content_type == "application/pdf" and is_pdf(data) and file_extension == '.pdf':
-        segments = pdf_parser(data)
-        if len(segments) == 0:
-            raise EmptyDocumentError(
-                "Empty Document"
-            )
-        return segments
+    try:
+        if content_type == "application/pdf" and is_pdf(data) and file_extension == '.pdf':
+            segments = type_to_parser_map[content_type](data)
+            if len(segments) == 0:
+                raise EmptyDocumentError(
+                    "Empty Document During Extraction"
+                )
+            return segments
         
 
-    if content_type == ("application/vnd.openxmlformats-officedocument." "wordprocessingml.document") and is_docx(data) and file_extension == '.docx':
-        if data[:3] == b'\xef\xbb\xbf':
-            text = data.decode('utf-8-sig')
-        else:
-            text = data.decode('utf-8')
+        if content_type == ("application/vnd.openxmlformats-officedocument." "wordprocessingml.document") and is_docx(data) and file_extension == '.docx':
+            pass
 
-    if content_type == "text/plain" and is_text_or_is_markdown(data) and file_extension == '.txt':
-        if data[:3] == b'\xef\xbb\xbf':
-            text = data.decode('utf-8-sig')
-        else:
-            text = data.decode('utf-8')
+        if content_type == "text/plain" and is_text_or_is_markdown(data) and file_extension == '.txt':
+            if data[:3] == b'\xef\xbb\xbf':
+                text = data.decode('utf-8-sig')
+            else:
+                text = data.decode('utf-8')
 
+        if content_type == 'text/markdown' and is_text_or_is_markdown(data) and file_extension == '.md':
+            pass
+    except Exception as e:
+        logger.exception("Error during document extraction")
+        raise
 
-    
 
     

@@ -1,4 +1,5 @@
 import boto3
+import pytest
 
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from app.workers.ingestion_worker import claim_one_job, load_document_metadata, 
 from app.tests.test_database import TestSessionLocal
 from app.auth.models import User 
 from app.models import IngestionJob, Document, IngestionJobStatus
+from app.services.document_extraction import EmptyDocumentError
 
 
 uploads_dir = Path(__file__).resolve().parents[2] / "upload"
@@ -377,6 +379,6 @@ def test_scanned_pdf_extraction_without_tesseract(client: TestClient, db_session
 
     assert file_bytes is not None 
 
-    extracted_segments = extract_document(file_bytes, document_metadata)
-
-    assert extracted_segments == []
+    with pytest.raises(EmptyDocumentError):
+        extract_document(file_bytes, document_metadata)
+   
