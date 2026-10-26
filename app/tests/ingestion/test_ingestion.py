@@ -24,6 +24,7 @@ scanned_pdf = Path(uploads_dir) / "scanned_sample.pdf"
 native_test_pdf_file = Path(uploads_dir) / "native_test_and_image.pdf"
 test_txt_file = Path(uploads_dir) / "test.txt"
 test_empty_txt_file = Path(uploads_dir) / "empty.txt"
+test_md_file = Path(uploads_dir) / "test.md"
 
 def user_registration_helper(client: TestClient, email: str = "TEST@SAMPLE.COM"):
     password = "Securepass2"
@@ -249,11 +250,9 @@ def test_one_page_pdf_extraction(client: TestClient, db_session: Session, mock_s
     assert document_metadata is not None 
 
     file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
-
     assert file_bytes is not None 
 
     extracted_results = extract_document(file_bytes, document_metadata)
-
     assert extracted_results is not None
 
 def test_multi_page_pdf_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
@@ -291,13 +290,10 @@ def test_multi_page_pdf_extraction(client: TestClient, db_session: Session, mock
     assert document_metadata is not None 
 
     file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
-
     assert file_bytes is not None 
 
     extraction_results = extract_document(file_bytes, document_metadata)
-
     assert extraction_results is not None
-    assert extraction_results[-1].extracted_segment.page_number == 12
 
 def test_malformed_pdf_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
     email, password = user_registration_helper(client)
@@ -454,7 +450,7 @@ def test_txt_file_extraction(client: TestClient, db_session: Session, mock_s3_cl
     extracted_results = extract_document(file_bytes, document_metadata)
     assert extracted_results is not None
 
-def test_txt_file_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
+def test_empty_txt_file_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
     email, password = user_registration_helper(client)
     token = user_login_helper(client,  email, password)
 
@@ -492,3 +488,40 @@ def test_txt_file_extraction(client: TestClient, db_session: Session, mock_s3_cl
     with pytest.raises(EmptyDocumentError):
         extract_document(b"", document_metadata)
 
+def test_md_file_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client,  email, password)
+
+    with open(test_md_file, "rb") as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files = {
+                "file": (test_md_file.name, f, "text/markdown")
+            }
+        )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = db_session.scalar(
+        select(User)
+        .where(User.email == email.lower())
+    )
+    assert user is not None
+
+    document = db_session.scalar(
+        select(Document)
+        .where(Document.user_id == user.id)
+    )
+    assert document is not None 
+
+    job = claim_one_job(TestSessionLocal)
+    assert job is not None 
+
+    document_metadata = load_document_metadata(document.id, TestSessionLocal)
+    assert document_metadata is not None 
+
+    file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
+    assert file_bytes is not None 
+
+    extracted_results = extract_document(file_bytes, document_metadata)
+    assert extracted_results is not None

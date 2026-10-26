@@ -4,11 +4,13 @@ import os
 import re
 import zipfile
 import chardet
-from dataclasses import dataclass
-from typing import Literal
-
+import markdown
 import pymupdf
+
+from dataclasses import dataclass
+from typing import Literal, Optional
 from pymupdf import FileDataError
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -27,32 +29,32 @@ LIKELY_SCANNED_COVERAGE_THRESHOLD = 0.75
 
 @dataclass
 class SourceLocation:
-    kind: Literal["page", "paragraph", "line"]
-    index: int
+    kind: Literal["page", "paragraph", "line", 'heading', 'paragraph', 'link']
+    index: Optional[int] = None
 
 
 @dataclass
 class ExtractedSegment:
     text: str
     source_location: SourceLocation
-    page_number: int | None
     origin_field: Literal["native_text", "ocr", "image_caption"]
+    page_number: Optional[int] = None
 
 
 @dataclass
 class PageDiagnostic:
-    page_number: int
-    has_images: bool
-    image_count: int
-    image_coverage_ratio: list[float]
-    text_character_count: int
-    classification: Literal["text_available", "likely_scanned", "unknown"]
+    classification: Optional[Literal["text_available", "likely_scanned", "unknown"]] = None
+    page_number: Optional[int] = None 
+    has_images: Optional[bool] = None
+    image_count: Optional[int] = None
+    image_coverage_ratio: Optional[list[float]] = None
+    text_character_count: Optional[int] = None
 
 
 @dataclass
 class ExtractionResult:
     extracted_segment: ExtractedSegment | None
-    diagnostic: PageDiagnostic
+    diagnostic: Optional[PageDiagnostic] = None
 
 
 class UnsupportedDocumentTypeError(Exception):
@@ -194,9 +196,9 @@ def pdf_parser(data: bytes) -> list[ExtractionResult]:
 def text_parser(data: bytes) -> list[ExtractionResult]:
     try:
         segments = []
+        detected = chardet.detect(data)
+        encoding = detected.get('encoding', 'utf-8')
         for line_num, byte_line in enumerate(data.splitlines(), start=1):
-            detected = chardet.detect(data)
-            encoding = detected.get('encoding', 'utf-8')
             decoded_text = byte_line.decode(encoding, errors='replace')
             segment = ExtractedSegment(
                 text=decoded_text.strip(),
@@ -204,18 +206,75 @@ def text_parser(data: bytes) -> list[ExtractionResult]:
                     kind='line',
                     index=line_num
                 ),
-                page_number=line_num,
                 origin_field='native_text'
             )
+            diagnostic = PageDiagnostic(
 
-            segments.append(segment)
+            )
+
+            segments.append(
+                ExtractionResult(
+                    diagnostic=diagnostic,
+                    extracted_segment=segment,
+                )
+            )
         return segments 
     except Exception as e:
         raise
-    
+
+def md_parser(data: bytes) -> list[ExtractionResult]:
+    detected = chardet.detect(data)
+    encoding = detected.get('encoding', 'utf-8')
+    md_text = data.decode(encoding, errors='replace')
+
+    html_content = markdown.markdown(md_text)
+
+    soup = BeautifulSoup(html_content, 'html.parser')
+
+    segments= []
+    for i in range(1, 7):
+        for h in soup.find_all(f'h{i}'):
+            h_text = h.get_text()
+            if h_text !=  '': 
+                segment = ExtractedSegment(
+                    text=h.get_text(),
+                    source_location=SourceLocation(
+                        kind='heading'
+                    ),
+                    origin_field='native_text'
+                )
+                segments.append(segment)
+
+    for a_tag in soup.find_all('a', href=True):
+        tag_text = a_tag.get_text()
+        if tag_text != '': 
+            segment = ExtractedSegment(
+                text=a_tag.get_text(),
+                source_location=SourceLocation(
+                    kind='link'
+                ),
+                origin_field='native_text'
+            )
+            segments.append(segment)
+
+    for p in soup.find_all('p'):
+        p_tag = p.get_text()
+        if p_tag != '':
+            segment = ExtractedSegment(
+                text=p.get_text(),
+                source_location=SourceLocation(
+                    kind='paragraph'
+                ),
+                origin_field='native_text'
+            )
+            segments.append(segment)
+
+    return segments
+  
 type_to_parser_map = {
     "application/pdf": pdf_parser,
     "text/plain": text_parser,
+    "text/markdown": md_parser
 }
 
 
@@ -276,9 +335,11 @@ def extract_document(data: bytes, metadata) -> list[ExtractionResult]:
                 f"Markdown content does not match the filename for document "
                 f"{document_id}"
             )
-        raise NotImplementedError(
-            "Markdown extraction has not been implemented yet"
-        )
+        
+        results = type_to_parser_map[content_type](data)
+        if not results:
+            raise EmptyDocumentError('MD file contains no content')
+        return results
 
     raise UnsupportedDocumentTypeError(
         f"No parser is configured for content type: {content_type}"
