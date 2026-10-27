@@ -254,6 +254,7 @@ def test_one_page_pdf_extraction(client: TestClient, db_session: Session, mock_s
 
     extracted_results = extract_document(file_bytes, document_metadata)
     assert extracted_results is not None
+    assert extracted_results[-1].diagnostic is not None 
 
 def test_multi_page_pdf_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
     email, password = user_registration_helper(client)
@@ -449,6 +450,7 @@ def test_txt_file_extraction(client: TestClient, db_session: Session, mock_s3_cl
 
     extracted_results = extract_document(file_bytes, document_metadata)
     assert extracted_results is not None
+    assert extracted_results[-1].diagnostic == None
 
 def test_empty_txt_file_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
     email, password = user_registration_helper(client)
@@ -525,3 +527,4 @@ def test_md_file_extraction(client: TestClient, db_session: Session, mock_s3_cli
 
     extracted_results = extract_document(file_bytes, document_metadata)
     assert extracted_results is not None
+    assert extracted_results[-1].diagnostic == None

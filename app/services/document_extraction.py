@@ -4,13 +4,12 @@ import os
 import re
 import zipfile
 import chardet
-import markdown
 import pymupdf
 
 from dataclasses import dataclass
 from typing import Literal, Optional
 from pymupdf import FileDataError
-from bs4 import BeautifulSoup
+from markdown_it import MarkdownIt
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,7 @@ LIKELY_SCANNED_COVERAGE_THRESHOLD = 0.75
 
 @dataclass
 class SourceLocation:
-    kind: Literal["page", "paragraph", "line", 'heading', 'paragraph', 'link']
+    kind: Literal["page", "paragraph", "line", 'heading', 'link', 'list', 'inline', 'code_block']
     index: Optional[int] = None
 
 
@@ -194,80 +193,95 @@ def pdf_parser(data: bytes) -> list[ExtractionResult]:
         raise CorruptFileError("Unable to read PDF file") from exc
 
 def text_parser(data: bytes) -> list[ExtractionResult]:
-    try:
-        segments = []
-        detected = chardet.detect(data)
-        encoding = detected.get('encoding', 'utf-8')
-        for line_num, byte_line in enumerate(data.splitlines(), start=1):
-            decoded_text = byte_line.decode(encoding, errors='replace')
-            segment = ExtractedSegment(
-                text=decoded_text.strip(),
-                source_location=SourceLocation(
-                    kind='line',
-                    index=line_num
-                ),
-                origin_field='native_text'
-            )
-            diagnostic = PageDiagnostic(
+    segments = []
+    detected = chardet.detect(data)
+    encoding = detected.get('encoding', 'utf-8')
+    for line_num, byte_line in enumerate(data.splitlines(), start=1):
+        decoded_text = byte_line.decode(encoding, errors='replace')
+        segment = ExtractedSegment(
+            text=decoded_text.strip(),
+            source_location=SourceLocation(
+                kind='line',
+                index=line_num
+            ),
+            origin_field='native_text',
+        )
+        diagnostic = None
 
+        segments.append(
+            ExtractionResult(
+                diagnostic=diagnostic,
+                extracted_segment=segment,
             )
+        )
+    return segments 
 
-            segments.append(
-                ExtractionResult(
-                    diagnostic=diagnostic,
-                    extracted_segment=segment,
-                )
-            )
-        return segments 
-    except Exception as e:
-        raise
 
 def md_parser(data: bytes) -> list[ExtractionResult]:
     detected = chardet.detect(data)
     encoding = detected.get('encoding', 'utf-8')
     md_text = data.decode(encoding, errors='replace')
 
-    html_content = markdown.markdown(md_text)
-
-    soup = BeautifulSoup(html_content, 'html.parser')
+    md = MarkdownIt()
+    tokens = md.parse(md_text)
 
     segments= []
-    for i in range(1, 7):
-        for h in soup.find_all(f'h{i}'):
-            h_text = h.get_text()
-            if h_text !=  '': 
-                segment = ExtractedSegment(
-                    text=h.get_text(),
-                    source_location=SourceLocation(
-                        kind='heading'
-                    ),
-                    origin_field='native_text'
+    index = 1
+    current_block = None
+
+
+    for _, token in enumerate(tokens):
+        if token.type.startswith('inline'):
+            inline_text = "".join(
+                child.content
+                for child in (token.children or [])
+                if child.type in {"text", "code_inline", "image"}
+            )
+            if inline_text.strip() == "":
+                continue
+            segment_kind = current_block or 'inline'
+            segment = ExtractedSegment(
+                text=inline_text,
+                source_location=SourceLocation(
+                    kind=segment_kind,
+                    index=index
+                ),
+                origin_field='native_text',
+                page_number=None
+            )
+            segments.append(
+                ExtractionResult(
+                    extracted_segment=segment,
+                    diagnostic=None
                 )
-                segments.append(segment)
-
-    for a_tag in soup.find_all('a', href=True):
-        tag_text = a_tag.get_text()
-        if tag_text != '': 
+            ) 
+            index += 1
+            current_block = None
+        elif token.type.startswith('heading_open'):
+            current_block = 'heading'
+        elif token.type.startswith('paragraph_open'):
+            current_block = 'paragraph'
+        elif token.type.startswith('bullet_list_open') or token.type.startswith('ordered_list_open'):
+            # Set the current block to 'list' when a list is opened
+            pass
+        elif token.type == 'fence' or token.type == 'code_block':
+            code_text = token.content
             segment = ExtractedSegment(
-                text=a_tag.get_text(),
+                text=code_text,
                 source_location=SourceLocation(
-                    kind='link'
-                ),
-                origin_field='native_text'
+                    kind='code_block',
+                    index=index
+                ),              
+                origin_field='native_text',
+                page_number=None
+            )                   
+            segments.append(
+                ExtractionResult(
+                    extracted_segment=segment,
+                    diagnostic=None         
+                )     
             )
-            segments.append(segment)
-
-    for p in soup.find_all('p'):
-        p_tag = p.get_text()
-        if p_tag != '':
-            segment = ExtractedSegment(
-                text=p.get_text(),
-                source_location=SourceLocation(
-                    kind='paragraph'
-                ),
-                origin_field='native_text'
-            )
-            segments.append(segment)
+            index += 1
 
     return segments
   
