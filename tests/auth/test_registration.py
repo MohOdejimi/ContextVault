@@ -1,4 +1,4 @@
-"""from fastapi.testclient import TestClient 
+from fastapi.testclient import TestClient 
 from fastapi import status
 
 from sqlalchemy.orm import Session 
@@ -220,4 +220,4 @@ def test_tampered_token(client: TestClient):
         }
     )
 
-    assert profile_response.status_code == status.HTTP_401_UNAUTHORIZED"""
+    assert profile_response.status_code == status.HTTP_401_UNAUTHORIZED

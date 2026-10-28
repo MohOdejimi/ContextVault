@@ -9,13 +9,13 @@ from fastapi.testclient import TestClient
 from fastapi import status
 
 from app.workers.ingestion_worker import claim_one_job, load_document_metadata, obtain_file_bytes, extract_document
-from app.tests.test_database import TestSessionLocal
+from tests.test_database import TestSessionLocal
 from app.auth.models import User 
 from app.models import IngestionJob, Document, IngestionJobStatus
 from app.services.document_extraction import CorruptFileError, EmptyDocumentError
 
 
-uploads_dir = Path(__file__).resolve().parents[2] / "upload"
+uploads_dir = Path(__file__).resolve().parents[1] / "upload"
 
 test_pdf_file = Path(uploads_dir) / "test.pdf"
 test_one_page_pdf_file = Path(uploads_dir) / "test1.pdf"

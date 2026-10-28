@@ -3,14 +3,14 @@ import boto3
 from botocore.exceptions import ClientError
 
 from app.storage.s3 import get_s3_client
-from app.config import S3_BUCKET_NAME
+from app.core.config import S3_BUCKET_NAME
 
 class ObjectNotFound(Exception):
     pass
 
 def get_raw_file_bytes(
         object_key: str,
-        client = None
+        client: boto3.client = None
 ) -> bytes: 
     client = client or get_s3_client()
     try:

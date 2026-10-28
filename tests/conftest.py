@@ -11,16 +11,16 @@ from collections.abc import Generator
 from fastapi.testclient import TestClient
 from moto import mock_aws
 
-from app.config import (
+from app.core.config import (
     AWS_ACCESS_KEY_ID,
     AWS_SECRET_ACCESS_KEY,
     AWS_DEFAULT_REGION,
 )
-from app.database import get_db as production_get_db 
+from app.core.database import get_db as production_get_db
 from app.auth.models import User 
 from app.storage.s3 import get_s3_client as production_s3_client
 from app.main import app 
-from app.tests.test_database import TestSessionLocal
+from tests.test_database import TestSessionLocal
 
 
 def override_get_db() -> Generator[Session, None, None]:

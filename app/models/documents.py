@@ -6,7 +6,7 @@ from sqlalchemy import ForeignKey, Enum, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
-from app.database.base import Base 
+from app.core.database.base import Base 
 from app.auth.models import User
 
 if TYPE_CHECKING:

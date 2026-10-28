@@ -14,8 +14,8 @@ from sqlalchemy import select
 from app.auth.models import User
 from app.auth.schema import UserCreate, UserOut, Token
 from app.auth.security import hash_password, verify_password, create_access_token
-from app.database import get_db
-from app.config import JWT_ALGORITHM, JWT_SECRET
+from app.core.database import get_db
+from app.core.config import JWT_ALGORITHM, JWT_SECRET
 
 
 load_dotenv()

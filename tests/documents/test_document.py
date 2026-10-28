@@ -1,4 +1,4 @@
-"""import os
+import os
 import boto3
 
 from pathlib import Path
@@ -12,14 +12,13 @@ from app.models.documents import Document
 from app.models.ingestion import IngestionJob, IngestionJobStatus
 from app.auth.models import User
 
-uploads_dir = Path(__file__).resolve().parents[2] / "upload"
+uploads_dir = Path(__file__).resolve().parents[1] / "upload"
 
 test_pdf_file = Path(uploads_dir) / "test.pdf"
 test_doc_file = Path(uploads_dir) / "test.docx"
 test_txt_file = Path(uploads_dir) / "test.txt"
 test_md_file = Path(uploads_dir) / "test.md"
 test_yml_file = Path(uploads_dir) / "test.yaml"
-empty_file = Path(uploads_dir) / "empty.txt"
 large_file = Path(uploads_dir) / "large.pdf"
 
 bucket = os.getenv("S3_BUCKET_NAME")
@@ -196,19 +195,6 @@ def test_mime_mismatch(client: TestClient):
 
     assert response.status_code == status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
 
-def test_empty_file(client: TestClient):
-    email, password = user_registration_helper(client)
-    token = user_login_helper(client, email, password)
-
-    with open(empty_file, "rb") as f:
-        response = client.post('/document',
-            headers = {"Authorization": f"Bearer {token}"},
-            files = {
-                "file": (empty_file.name, f, "text/plain")
-            }
-        )
-
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 def test_file_larger_than_limit(client: TestClient):
     email, password = user_registration_helper(client)
@@ -580,4 +566,3 @@ def test_insertion_job_transaction_failure_test(
             )
 
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-"""

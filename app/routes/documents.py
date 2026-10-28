@@ -14,11 +14,11 @@ from botocore.exceptions import ClientError, NoCredentialsError, PartialCredenti
 from app.models.documents import Document
 from app.models.ingestion import IngestionJob
 from app.auth.routes import get_current_user
-from app.database import get_db
+from app.core.database import get_db
 from app.auth.models import User
 from app.schema import Document_Response
 from app.storage.s3 import get_s3_client
-from app.config import S3_BUCKET_NAME
+from app.core.config import S3_BUCKET_NAME
 
 router = APIRouter(tags=["File Upload"])
 logger = logging.getLogger(__name__)

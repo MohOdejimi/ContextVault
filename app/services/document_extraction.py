@@ -28,7 +28,7 @@ LIKELY_SCANNED_COVERAGE_THRESHOLD = 0.75
 
 @dataclass
 class SourceLocation:
-    kind: Literal["page", "paragraph", "line", 'heading', 'link', 'list', 'inline', 'code_block']
+    kind: Literal["page", "paragraph", "line", 'heading', 'link', 'list_item', 'inline', 'code_block']
     index: Optional[int] = None
 
 
@@ -228,6 +228,7 @@ def md_parser(data: bytes) -> list[ExtractionResult]:
     segments= []
     index = 1
     current_block = None
+    list_stack = []
 
 
     for _, token in enumerate(tokens):
@@ -238,8 +239,11 @@ def md_parser(data: bytes) -> list[ExtractionResult]:
                 if child.type in {"text", "code_inline", "image"}
             )
             if inline_text.strip() == "":
+                current_block = None
                 continue
             segment_kind = current_block or 'inline'
+            if list_stack:
+                segment_kind = 'list_item'
             segment = ExtractedSegment(
                 text=inline_text,
                 source_location=SourceLocation(
@@ -260,12 +264,17 @@ def md_parser(data: bytes) -> list[ExtractionResult]:
         elif token.type.startswith('heading_open'):
             current_block = 'heading'
         elif token.type.startswith('paragraph_open'):
-            current_block = 'paragraph'
-        elif token.type.startswith('bullet_list_open') or token.type.startswith('ordered_list_open'):
-            # Set the current block to 'list' when a list is opened
-            pass
+            if current_block != 'list':
+                current_block = 'paragraph'
+        elif token.type.startswith('list_item_open'):
+            list_stack.append('list_item')
+            current_block = 'list'
+        elif token.type.startswith('list_item_close'):
+            if list_stack:
+                list_stack.pop()
+            current_block = None
         elif token.type == 'fence' or token.type == 'code_block':
-            code_text = token.content
+            code_text = token.content.strip()
             segment = ExtractedSegment(
                 text=code_text,
                 source_location=SourceLocation(
@@ -284,11 +293,15 @@ def md_parser(data: bytes) -> list[ExtractionResult]:
             index += 1
 
     return segments
+
+def docx_parser(data: bytes) -> list[ExtractionResult]:
+    pass
   
 type_to_parser_map = {
     "application/pdf": pdf_parser,
     "text/plain": text_parser,
-    "text/markdown": md_parser
+    "text/markdown": md_parser,
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": docx_parser
 }
 
 

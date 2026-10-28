@@ -8,7 +8,7 @@ from sqlalchemy import ForeignKey, Enum, CheckConstraint, DateTime, Index, text
 from sqlalchemy.orm import Mapped, relationship, mapped_column
 from sqlalchemy.sql import func
 
-from app.database.base import Base 
+from app.core.database.base import Base 
 
 if TYPE_CHECKING:
     from app.models import Document 

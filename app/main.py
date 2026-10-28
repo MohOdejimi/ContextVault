@@ -7,7 +7,7 @@ from botocore.exceptions import ClientError
 
 from app.auth.routes import router as auth_router
 from app.routes.documents import router as documents_router
-from app.config import S3_BUCKET_NAME, S3_REGION_NAME
+from app.core.config import S3_BUCKET_NAME, S3_REGION_NAME
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

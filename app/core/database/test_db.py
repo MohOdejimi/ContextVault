@@ -1,7 +1,7 @@
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.database.connection import engine
+from app.core.database.connection import engine
 
 try:
     with engine.connect() as connection:

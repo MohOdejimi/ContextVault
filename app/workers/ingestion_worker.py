@@ -11,8 +11,8 @@ from app.services.document_metadata import load_document
 from app.services.document_storage import get_raw_file_bytes
 from app.services.document_extraction import extract_document
 from app.storage.s3 import get_s3_client
-from app.database.connection import SessionLocal 
-from app.config import S3_BUCKET_NAME
+from app.core.database.connection import SessionLocal 
+from app.core.config import S3_BUCKET_NAME
 
 
 logger = logging.getLogger(__name__)
@@ -74,11 +74,3 @@ def obtain_file_bytes(
         logger.exception("Failed to obtain file bytes for %s", s3_key)
         raise
 
-
-
-
-
-    
-
-    
-    
