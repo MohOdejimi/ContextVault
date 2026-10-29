@@ -7,9 +7,14 @@ import chardet
 import pymupdf
 
 from dataclasses import dataclass
+from docx import Document
+from docx.text.paragraph import Paragraph
+from docx.table import Table
+from docx.section import Section
 from typing import Literal, Optional
 from pymupdf import FileDataError
 from markdown_it import MarkdownIt
+
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +33,7 @@ LIKELY_SCANNED_COVERAGE_THRESHOLD = 0.75
 
 @dataclass
 class SourceLocation:
-    kind: Literal["page", "paragraph", "line", 'heading', 'link', 'list_item', 'inline', 'code_block']
+    kind: Literal["page", "paragraph", "line", 'heading', 'link', 'list_item', 'inline', 'code_block', 'table_row', 'caption']
     index: Optional[int] = None
 
 
@@ -193,13 +198,15 @@ def pdf_parser(data: bytes) -> list[ExtractionResult]:
         raise CorruptFileError("Unable to read PDF file") from exc
 
 def text_parser(data: bytes) -> list[ExtractionResult]:
-    segments = []
+    segments: list[ExtractionResult] = []
     detected = chardet.detect(data)
     encoding = detected.get('encoding', 'utf-8')
     for line_num, byte_line in enumerate(data.splitlines(), start=1):
-        decoded_text = byte_line.decode(encoding, errors='replace')
+        decoded_text = byte_line.decode(encoding, errors='replace').strip()
+        if not decoded_text:
+            continue
         segment = ExtractedSegment(
-            text=decoded_text.strip(),
+            text=decoded_text,
             source_location=SourceLocation(
                 kind='line',
                 index=line_num
@@ -225,7 +232,7 @@ def md_parser(data: bytes) -> list[ExtractionResult]:
     md = MarkdownIt()
     tokens = md.parse(md_text)
 
-    segments= []
+    segments: list[ExtractionResult] = []
     index = 1
     current_block = None
     list_stack = []
@@ -275,6 +282,8 @@ def md_parser(data: bytes) -> list[ExtractionResult]:
             current_block = None
         elif token.type == 'fence' or token.type == 'code_block':
             code_text = token.content.strip()
+            if code_text == '':
+                continue 
             segment = ExtractedSegment(
                 text=code_text,
                 source_location=SourceLocation(
@@ -294,8 +303,110 @@ def md_parser(data: bytes) -> list[ExtractionResult]:
 
     return segments
 
+def flush_list_items_buffer_helper(index: int, list_items_buffer: list):
+    result = None
+    if list_items_buffer:
+            segment = ExtractedSegment(
+                text='\n'.join(list_items_buffer),
+                source_location=SourceLocation(
+                    kind='list',
+                    index=index
+                ),
+                origin_field='native_text',
+                page_number=None
+            )
+            result = ExtractionResult(
+                extracted_segment=segment,
+                diagnostic=None
+            )
+            list_items_buffer.clear()
+
+    return result
+
+
 def docx_parser(data: bytes) -> list[ExtractionResult]:
-    pass
+    file_like_obj = io.BytesIO(data)
+    doc = Document(file_like_obj)
+    list_items_buffer = []
+
+    results: list[ExtractionResult] = []
+    index = 1
+
+    for block in doc.iter_inner_content():
+        if isinstance(block, Paragraph):
+            text = block.text.strip()
+            blockPr = block._p.pPr
+
+            kind = 'paragraph'
+
+            if block.style.name.startswith('Normal') or block.style.name.startswith('Title') or block.style.name.startswith('Caption') or block.style.name.startswith('Heading'):
+                kind = 'heading'
+            
+            if block.style is not None and (block.style.name.startswith('List') or (blockPr is not None and blockPr.numPr is not None)):
+                if text == '':
+                    continue
+                else:
+                    list_items_buffer.append(text)
+                continue
+            else:
+                result = flush_list_items_buffer_helper(index, list_items_buffer)
+                if result is not None:
+                    results.append(result)
+                    index += 1
+
+            if block.style is None or block.style.name == 'Paragraph':
+                kind = 'paragraph'
+
+            if not text:
+                continue
+            segment = ExtractedSegment(
+                text=text,
+                source_location=SourceLocation(
+                    kind=kind,
+                    index=index
+                ),
+                origin_field='native_text',
+                page_number=None
+            )
+            results.append(
+                ExtractionResult(
+                    extracted_segment=segment,
+                    diagnostic=None
+                )
+            )
+            index += 1
+        elif isinstance(block, Table):
+            result = flush_list_items_buffer_helper(index, list_items_buffer)
+            if result is not None:
+                results.append(result)
+                index += 1
+            for row in block.rows:
+                row_data = [cell.text for cell in row.cells if cell.text.strip() != '']
+                if not row_data:
+                    continue 
+                segment = ExtractedSegment(
+                    text = '|'.join(row_data),
+                    source_location=SourceLocation(
+                        kind='table_row',
+                        index=index
+                    ),
+                    origin_field='native_text',
+                    page_number=None
+                )
+                results.append(
+                    ExtractionResult(
+                        extracted_segment=segment,
+                        diagnostic=None
+                    )
+                )
+                index += 1
+
+    result = flush_list_items_buffer_helper(index, list_items_buffer)
+    if result is not None:
+        results.append(result)
+        index += 1
+
+    return results
   
 type_to_parser_map = {
     "application/pdf": pdf_parser,
@@ -343,7 +454,11 @@ def extract_document(data: bytes, metadata) -> list[ExtractionResult]:
                 f"DOCX content does not match the filename for document "
                 f"{document_id}"
             )
-        raise NotImplementedError("DOCX extraction has not been implemented yet")
+        results = type_to_parser_map[content_type](data)
+        if not results:
+            raise EmptyDocumentError('DOCX contains no content')
+            #Extend docx parsing logic for old doc files
+        return results
 
     if content_type == "text/plain":
         if file_extension != ".txt" or not is_text_or_is_markdown(data):

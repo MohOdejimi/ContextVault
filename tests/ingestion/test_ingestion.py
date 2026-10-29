@@ -25,6 +25,7 @@ native_test_pdf_file = Path(uploads_dir) / "native_test_and_image.pdf"
 test_txt_file = Path(uploads_dir) / "test.txt"
 test_empty_txt_file = Path(uploads_dir) / "empty.txt"
 test_md_file = Path(uploads_dir) / "test.md"
+test_docx_file = Path(uploads_dir) / "test.docx"
 
 def user_registration_helper(client: TestClient, email: str = "TEST@SAMPLE.COM"):
     password = "Securepass2"
@@ -499,6 +500,45 @@ def test_md_file_extraction(client: TestClient, db_session: Session, mock_s3_cli
             headers={"Authorization": f"Bearer {token}"},
             files = {
                 "file": (test_md_file.name, f, "text/markdown")
+            }
+        )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = db_session.scalar(
+        select(User)
+        .where(User.email == email.lower())
+    )
+    assert user is not None
+
+    document = db_session.scalar(
+        select(Document)
+        .where(Document.user_id == user.id)
+    )
+    assert document is not None 
+
+    job = claim_one_job(TestSessionLocal)
+    assert job is not None 
+
+    document_metadata = load_document_metadata(document.id, TestSessionLocal)
+    assert document_metadata is not None 
+
+    file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
+    assert file_bytes is not None 
+
+    extracted_results = extract_document(file_bytes, document_metadata)
+    assert extracted_results is not None
+    assert extracted_results[-1].diagnostic == None
+
+def test_docx_file_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client,  email, password)
+
+    with open(test_docx_file, "rb") as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files = {
+                "file": (test_docx_file.name, f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
             }
         )
 
