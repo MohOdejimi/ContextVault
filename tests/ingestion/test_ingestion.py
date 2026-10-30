@@ -8,7 +8,7 @@ from sqlalchemy import select, update
 from fastapi.testclient import TestClient
 from fastapi import status
 
-from app.workers.ingestion_worker import claim_one_job, load_document_metadata, obtain_file_bytes, extract_document
+from app.workers.ingestion_worker import claim_one_job, load_document_metadata, obtain_file_bytes, extract_segments_from_document_by_worker, normalize_segments_by_worker
 from tests.test_database import TestSessionLocal
 from app.auth.models import User 
 from app.models import IngestionJob, Document, IngestionJobStatus
@@ -253,7 +253,7 @@ def test_one_page_pdf_extraction(client: TestClient, db_session: Session, mock_s
     file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
     assert file_bytes is not None 
 
-    extracted_results = extract_document(file_bytes, document_metadata)
+    extracted_results = extract_segments_from_document_by_worker(file_bytes, document_metadata)
     assert extracted_results is not None
     assert extracted_results[-1].diagnostic is not None 
 
@@ -294,7 +294,7 @@ def test_multi_page_pdf_extraction(client: TestClient, db_session: Session, mock
     file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
     assert file_bytes is not None 
 
-    extraction_results = extract_document(file_bytes, document_metadata)
+    extraction_results = extract_segments_from_document_by_worker(file_bytes, document_metadata)
     assert extraction_results is not None
 
 def test_malformed_pdf_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
@@ -335,7 +335,7 @@ def test_malformed_pdf_extraction(client: TestClient, db_session: Session, mock_
     assert file_bytes is not None 
 
     with pytest.raises(CorruptFileError):
-        extract_document(file_bytes, document_metadata) 
+        extract_segments_from_document_by_worker(file_bytes, document_metadata) 
 
 def test_scanned_pdf_extraction_without_tesseract(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
     email, password = user_registration_helper(client)
@@ -374,7 +374,7 @@ def test_scanned_pdf_extraction_without_tesseract(client: TestClient, db_session
     file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
     assert file_bytes is not None 
 
-    assert extract_document(file_bytes, document_metadata) is not None
+    assert extract_segments_from_document_by_worker(file_bytes, document_metadata) is not None
 
 def test__pdf_with_text_and_image_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
     email, password = user_registration_helper(client)
@@ -411,7 +411,7 @@ def test__pdf_with_text_and_image_extraction(client: TestClient, db_session: Ses
     file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
     assert file_bytes is not None 
 
-    extracted_results = extract_document(file_bytes, document_metadata)
+    extracted_results = extract_segments_from_document_by_worker(file_bytes, document_metadata)
     assert extracted_results is not None
 
 def test_txt_file_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
@@ -449,7 +449,7 @@ def test_txt_file_extraction(client: TestClient, db_session: Session, mock_s3_cl
     file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
     assert file_bytes is not None 
 
-    extracted_results = extract_document(file_bytes, document_metadata)
+    extracted_results = extract_segments_from_document_by_worker(file_bytes, document_metadata)
     assert extracted_results is not None
     assert extracted_results[-1].diagnostic == None
 
@@ -489,7 +489,7 @@ def test_empty_txt_file_extraction(client: TestClient, db_session: Session, mock
     assert file_bytes is not None 
 
     with pytest.raises(EmptyDocumentError):
-        extract_document(b"", document_metadata)
+        extract_segments_from_document_by_worker(b"", document_metadata)
 
 def test_md_file_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
     email, password = user_registration_helper(client)
@@ -526,7 +526,7 @@ def test_md_file_extraction(client: TestClient, db_session: Session, mock_s3_cli
     file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
     assert file_bytes is not None 
 
-    extracted_results = extract_document(file_bytes, document_metadata)
+    extracted_results = extract_segments_from_document_by_worker(file_bytes, document_metadata)
     assert extracted_results is not None
     assert extracted_results[-1].diagnostic == None
 
@@ -565,6 +565,47 @@ def test_docx_file_extraction(client: TestClient, db_session: Session, mock_s3_c
     file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
     assert file_bytes is not None 
 
-    extracted_results = extract_document(file_bytes, document_metadata)
+    extracted_results = extract_segments_from_document_by_worker(file_bytes, document_metadata)
     assert extracted_results is not None
     assert extracted_results[-1].diagnostic == None
+
+def test_docx_file_normalization(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client,  email, password)
+
+    with open(test_docx_file, "rb") as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files = {
+                "file": (test_docx_file.name, f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            }
+        )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = db_session.scalar(
+        select(User)
+        .where(User.email == email.lower())
+    )
+    assert user is not None
+
+    document = db_session.scalar(
+        select(Document)
+        .where(Document.user_id == user.id)
+    )
+    assert document is not None 
+
+    job = claim_one_job(TestSessionLocal)
+    assert job is not None 
+
+    document_metadata = load_document_metadata(document.id, TestSessionLocal)
+    assert document_metadata is not None 
+
+    file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
+    assert file_bytes is not None 
+
+    extracted_results = extract_segments_from_document_by_worker(file_bytes, document_metadata)
+    assert extracted_results is not None 
+
+    normalized_segments = normalize_segments_by_worker(extracted_results)
+    assert normalized_segments is not None

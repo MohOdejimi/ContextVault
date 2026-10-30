@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from docx import Document
 from docx.text.paragraph import Paragraph
 from docx.table import Table
-from docx.section import Section
 from typing import Literal, Optional
 from pymupdf import FileDataError
 from markdown_it import MarkdownIt
@@ -323,6 +322,27 @@ def flush_list_items_buffer_helper(index: int, list_items_buffer: list):
 
     return result
 
+def is_list_item(paragraph: Paragraph) -> bool:
+    paragraph_properties = paragraph._p.pPr
+
+    if paragraph.style.name.startswith('Heading'):
+        return False
+
+    if paragraph_properties is not None and paragraph_properties.numPr is not None:
+        return True 
+
+    style = paragraph.style 
+
+    while style is not None:
+        style_properties = style._element.pPr 
+
+        if style_properties is not None and style_properties.numPr is not None:
+            return True 
+
+        style = style.base_style
+
+    return False
+
 
 def docx_parser(data: bytes) -> list[ExtractionResult]:
     file_like_obj = io.BytesIO(data)
@@ -335,14 +355,35 @@ def docx_parser(data: bytes) -> list[ExtractionResult]:
     for block in doc.iter_inner_content():
         if isinstance(block, Paragraph):
             text = block.text.strip()
-            blockPr = block._p.pPr
 
             kind = 'paragraph'
 
-            if block.style.name.startswith('Normal') or block.style.name.startswith('Title') or block.style.name.startswith('Caption') or block.style.name.startswith('Heading'):
+            if block.style is None:
+                if not text:
+                    continue 
+                else:
+                    segment = ExtractedSegment(
+                        text=text,
+                        source_location=SourceLocation(
+                            kind=kind,
+                            index=index
+                        ),
+                        origin_field='native_text',
+                        page_number=None
+                    )
+                    results.append(
+                        ExtractionResult(
+                            extracted_segment=segment,
+                            diagnostic=None
+                        )
+                    )
+                    index += 1
+                    continue
+
+            if block.style.name.startswith('Title') or block.style.name.startswith('Heading'):
                 kind = 'heading'
             
-            if block.style is not None and (block.style.name.startswith('List') or (blockPr is not None and blockPr.numPr is not None)):
+            if is_list_item(block):
                 if text == '':
                     continue
                 else:
@@ -353,10 +394,9 @@ def docx_parser(data: bytes) -> list[ExtractionResult]:
                 if result is not None:
                     results.append(result)
                     index += 1
-
-            if block.style is None or block.style.name == 'Paragraph':
-                kind = 'paragraph'
-
+                    
+            if block.style.name.startswith('Caption'):
+                kind = 'caption'
             if not text:
                 continue
             segment = ExtractedSegment(
@@ -381,9 +421,9 @@ def docx_parser(data: bytes) -> list[ExtractionResult]:
                 results.append(result)
                 index += 1
             for row in block.rows:
-                row_data = [cell.text for cell in row.cells if cell.text.strip() != '']
-                if not row_data:
-                    continue 
+                row_data = [cell.text for cell in row.cells]
+                if not any(row_data):
+                    continue
                 segment = ExtractedSegment(
                     text = '|'.join(row_data),
                     source_location=SourceLocation(
@@ -416,7 +456,7 @@ type_to_parser_map = {
 }
 
 
-def extract_document(data: bytes, metadata) -> list[ExtractionResult]:
+def extract_segments_from_document(data: bytes, metadata) -> list[ExtractionResult]:
     document_id = metadata.id
     size = metadata.document_size
     content_type = metadata.content_type.lower().strip()
