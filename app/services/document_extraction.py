@@ -1,4 +1,5 @@
 import io
+from itertools import groupby
 import logging
 import os
 import re
@@ -13,6 +14,7 @@ from docx.table import Table
 from typing import Literal, Optional
 from pymupdf import FileDataError
 from markdown_it import MarkdownIt
+from collections import Counter
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +34,7 @@ LIKELY_SCANNED_COVERAGE_THRESHOLD = 0.75
 
 @dataclass
 class SourceLocation:
-    kind: Literal["page", "paragraph", "line", 'heading', 'link', 'list_item', 'inline', 'code_block', 'table_row', 'caption']
+    kind: Literal["page", "paragraph", "line", 'heading', 'link', 'list_item', 'inline', 'code_block', 'table_row', 'caption', 'list', 'block']
     index: Optional[int] = None
 
 
@@ -53,11 +55,25 @@ class PageDiagnostic:
     image_coverage_ratio: Optional[list[float]] = None
     text_character_count: Optional[int] = None
 
+@dataclass 
+class PDFLineMetadata:
+    line_index: int
+    text: str
+    bbox: tuple[float, float, float, float]
+    font_size: float
+    bold_ratio: float 
+
+@dataclass
+class PDFBlockMetaData:
+    block_index: int
+    bbox: tuple[float, float, float, float]
+    lines: list[PDFLineMetadata]
 
 @dataclass
 class ExtractionResult:
     extracted_segment: ExtractedSegment | None
     diagnostic: Optional[PageDiagnostic] = None
+    pdf_metadata: Optional[PDFBlockMetaData] = None
 
 
 class UnsupportedDocumentTypeError(Exception):
@@ -108,25 +124,94 @@ def is_text_or_is_markdown(data: bytes) -> bool:
 
     return not re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", text)
 
+def _span_is_bold(span) -> bool:
+    bold_flag = bool(span.get('flags', 0) & 16)
+    name_flag = 'bold' in span.get('font', "").lower()
 
-def _inspect_page(page, page_number: int) -> tuple[str, PageDiagnostic]:
-    texts: list[str] = []
-    text_character_count = 0
+    return bold_flag or name_flag
 
-    for block in page.get_text("blocks", sort=True):
-        text = block[4].strip()
-        if not text:
+def block_extraction(page) -> list[PDFBlockMetaData]:
+    text_dict = page.get_text("dict", sort=True)
+    blocks = text_dict.get("blocks", [])
+    page_width = page.rect.width 
+    page_height = page.rect.height
+    block_records: list[PDFBlockMetaData] = []
+
+    for block_index, block in enumerate(blocks, start = 1):
+        line_metadatas: list[PDFLineMetadata] = []
+        if block["type"] != 0:
             continue
-        texts.append(text)
-        text_character_count += len(text)
+        block_bbox = block['bbox']
+        lines = block.get("lines", [])
+        local_text = ""
+        for line_index, line in enumerate(lines, start = 1):
+            line_text = ''
+            line_bbox = line['bbox'] 
+            size_chars: Counter = Counter()
+            bold_chars = 0 
+            total_chars = 0 
 
+            spans = line.get("spans", [])
+            for span in spans:
+                span_text = span.get("text", "")
+                line_text += span_text
+
+                n = len("".join(span_text.split()))
+
+                if n == 0:
+                    continue 
+
+                size_chars[round(span.get("size", 0), 1)] += n
+
+                total_chars += n 
+                if _span_is_bold(span):
+                    bold_chars += n 
+
+            line_text = line_text.strip()
+            if not line_text:
+                continue
+            local_text += line_text 
+            local_text += "\n"
+
+            line_metadata = PDFLineMetadata(
+                line_index = line_index,
+                text = line_text,
+                bbox = line_bbox,
+                font_size = size_chars.most_common(1)[0][0],
+                bold_ratio = bold_chars / total_chars,
+            )
+
+            if not line_metadata:
+                continue
+
+            line_metadatas.append(line_metadata)
+
+        block_metadata = PDFBlockMetaData(
+            block_index = block_index,
+            bbox = block_bbox,
+            lines = line_metadatas
+        )
+
+        block_records.append(block_metadata)
+
+    return block_records
+
+def _inspect_page(page, page_number: int) -> tuple[list[PDFBlockMetaData], PageDiagnostic]:
+    block_records = block_extraction(page)
+
+    text_character_count = sum(
+        len(line.text)
+        for block in block_records
+        for line in block.lines
+    )
+    
     page_rect = page.rect
     page_area = page_rect.get_area()
     coverage_ratios: list[float] = []
     image_count = 0
 
     if page_area > 0:
-        for image_info in page.get_image_info():
+        for image_info in page.get_image_info():  
             bbox = pymupdf.Rect(image_info["bbox"])
             visible = bbox & page_rect
 
@@ -136,8 +221,6 @@ def _inspect_page(page, page_number: int) -> tuple[str, PageDiagnostic]:
             coverage = visible.get_area() / page_area
             coverage_ratios.append(max(0.0, min(1.0, coverage)))
             image_count += 1
-
-    native_text = "\n\n".join(texts)
 
     if text_character_count > 0:
         classification = "text_available"
@@ -157,8 +240,7 @@ def _inspect_page(page, page_number: int) -> tuple[str, PageDiagnostic]:
         text_character_count=text_character_count,
         classification=classification,
     )
-    return native_text, diagnostic
-
+    return block_records, diagnostic
 
 def pdf_parser(data: bytes) -> list[ExtractionResult]:
     extraction_results: list[ExtractionResult] = []
@@ -166,26 +248,39 @@ def pdf_parser(data: bytes) -> list[ExtractionResult]:
     try:
         with pymupdf.open(stream=data, filetype="pdf") as doc:
             for page_number, page in enumerate(doc, start=1):
-                native_text, diagnostic = _inspect_page(page, page_number)
-
-                segment = None
-                if native_text:
-                    segment = ExtractedSegment(
-                        text=native_text,
-                        source_location=SourceLocation(
-                            kind="page",
-                            index=page_number,
-                        ),
-                        page_number=page_number,
-                        origin_field="native_text",
-                    )
-
+                block_records, diagnostic = _inspect_page(page, page_number)
                 extraction_results.append(
                     ExtractionResult(
-                        extracted_segment=segment,
-                        diagnostic=diagnostic,
+                        extracted_segment=None,
+                        diagnostic=diagnostic
                     )
                 )
+
+                for block in block_records:
+                    block_text = '\n'.join(
+                        line.text
+                        for line in block.lines
+                    ).strip()
+
+                    if not block_text:
+                        continue
+
+                    segment = ExtractedSegment(
+                        text = block_text,
+                        source_location = SourceLocation(
+                            kind='block',
+                            index=block.block_index
+                        ),
+                        origin_field='native_text',
+                        page_number=page_number
+                    )
+                    extraction_results.append(
+                        ExtractionResult(
+                            extracted_segment=segment,
+                            pdf_metadata=block,
+                            diagnostic=None,
+                        )
+                    )
 
         return extraction_results
 

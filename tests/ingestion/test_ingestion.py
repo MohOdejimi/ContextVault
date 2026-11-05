@@ -255,7 +255,7 @@ def test_one_page_pdf_extraction(client: TestClient, db_session: Session, mock_s
 
     extracted_results = extract_segments_from_document_by_worker(file_bytes, document_metadata)
     assert extracted_results is not None
-    assert extracted_results[-1].diagnostic is not None 
+    assert extracted_results[0].diagnostic is not None
 
 def test_multi_page_pdf_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
     email, password = user_registration_helper(client)

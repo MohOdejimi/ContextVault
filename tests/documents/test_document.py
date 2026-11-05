@@ -565,5 +565,4 @@ def test_insertion_job_transaction_failure_test(
                 files={"file": (test_pdf_file.name, f, "application/pdf")},
             )
 
-    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-"""
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR"""
