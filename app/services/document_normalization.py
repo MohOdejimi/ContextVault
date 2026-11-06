@@ -9,12 +9,8 @@ from .document_extraction import SourceLocation
 
 
 @dataclass 
-class NormalizedSegment:
-    text: str
-    source_location: SourceLocation
-    origin_field: Literal["native_text", "ocr", "image_caption"]
-    page_number: Optional[int] = None
-
+class NormalizedResult(ExtractionResult):
+    pass
 
 def normalize_heading_text(text: str) -> str:
     text = unicodedata.normalize('NFC', text)   
@@ -56,96 +52,109 @@ def normalize_code_block(code_block: str) -> str:
 
 
 def normalize_extraction_results(extracted_result: list[ExtractionResult]): 
-    normalized_segments: list[NormalizedSegment] = []
+    normalized_results : list[NormalizedResult] = []
 
     for result in extracted_result:
         segment = result.extracted_segment
-        if segment is None:
-            continue
         diagnostic = result.diagnostic
+        pdf_metadata = result.pdf_metadata
+
+        if segment is None:
+            # Potential OCR Handling
+            normalized_result = NormalizedResult(
+                extracted_segment = segment,
+                diagnostic = diagnostic,
+                pdf_metadata = pdf_metadata
+            )
+            normalized_results.append(normalized_result)
+            continue
 
         text = segment.text 
         source_location = segment.source_location
         kind = source_location.kind
-        index = source_location.index 
-        page_number = segment.page_number
-        origin_field = segment.origin_field 
+
 
         if kind == 'heading' or kind =='caption':
             normalized_heading = normalize_heading_text(text)
-            normalized_segment = NormalizedSegment(
-                text = normalized_heading,
-                source_location = source_location,
-                origin_field = origin_field, 
-                page_number = page_number
+            segment.text = normalized_heading
+            normalized_result = NormalizedResult(
+                extracted_segment = segment,
+                diagnostic = diagnostic,
+                pdf_metadata = pdf_metadata
             )
-            normalized_segments.append(normalized_segment)
+            if normalized_heading != "":
+                normalized_results.append(normalized_result)
         elif kind == 'paragraph':
             normalized_paragraph_text = normalize_paragraph_text(text)
-            normalized_segment = NormalizedSegment(
-                text = normalized_paragraph_text,
-                source_location = source_location,
-                origin_field = origin_field, 
-                page_number = page_number
+            segment.text = normalized_paragraph_text
+            normalized_result = NormalizedResult(
+                extracted_segment = segment,
+                diagnostic = diagnostic,
+                pdf_metadata = pdf_metadata
             )
-            if normalized_segment.text != '':
-                normalized_segments.append(normalized_segment)
+            if normalized_paragraph_text != '':
+                normalized_results.append(normalized_result)
         elif kind == 'line':
             normalized_line_text = normalize_paragraph_text(text)
-            normalized_segment = NormalizedSegment(
-                text = normalized_line_text,
-                source_location = source_location,
-                origin_field = origin_field, 
-                page_number = page_number
+            segment.text = normalized_line_text
+            normalized_result = NormalizedResult(
+                extracted_segment = segment,
+                diagnostic = diagnostic,
+                pdf_metadata = pdf_metadata
             )
-            if normalized_segment.text != '':
-                normalized_segments.append(normalized_segment)
+            if normalized_line_text != '':
+                normalized_results.append(normalized_result)
         elif kind == 'table_row':
-            normalized_segment = NormalizedSegment(
-                text = text,
-                source_location = source_location,
-                origin_field = origin_field,
-                page_number = page_number
-            )
-            if normalized_segment.text != '':
-                normalized_segments.append(normalized_segment)
+            normalized_results.append(result)
         elif kind == 'list_item':
             normalized_list_item_text = normalize_paragraph_text(text)
-            normalized_segment = NormalizedSegment(
-                text = normalized_list_item_text,
-                source_location = source_location,
-                origin_field = origin_field,
-                page_number = page_number
+            segment.text = normalized_list_item_text
+            normalized_result = NormalizedResult(
+                extracted_segment = segment,
+                diagnostic = diagnostic,
+                pdf_metadata = pdf_metadata
             )
-            if normalized_segment.text != '':
-                normalized_segments.append(normalized_segment)
+            if normalized_list_item_text != '':
+                normalized_results.append(normalized_result)
         elif kind == 'list':
             normalized_list_text = normalize_list(text)
-            normalized_segment = NormalizedSegment(
-                text = normalized_list_text,
-                source_location = source_location,
-                origin_field = origin_field,
-                page_number = page_number
+            segment.text = normalized_list_text
+            normalized_result = NormalizedResult(
+                extracted_segment = segment,
+                diagnostic = diagnostic,
+                pdf_metadata = pdf_metadata
             )
-            if normalized_segment.text != '':
-                normalized_segments.append(normalized_segment)
-        elif kind == 'page':
-            normalized_segment = NormalizedSegment(
-                text = text,
-                source_location = source_location,
-                origin_field = origin_field,
-                page_number = page_number
-            )
-            if normalized_segment.text != '':
-                normalized_segments.append(normalized_segment)
+            if normalized_list_text != '':
+                normalized_results.append(normalized_result)
         elif kind == 'code_block':
-            normalized_segment = NormalizedSegment(
-                text = normalize_code_block(text),
-                source_location = source_location,
-                origin_field = origin_field,
-                page_number = page_number
+            normalized_code_block_text = normalize_code_block(text)
+            segment.text = normalized_code_block_text
+            normalized_result = NormalizedResult(
+                extracted_segment = segment,
+                diagnostic = diagnostic,
+                pdf_metadata = pdf_metadata
             )
-            if normalized_segment.text != '':
-                normalized_segments.append(normalized_segment)
-            
-    return normalized_segments
+            if normalized_code_block_text != '':
+                normalized_results.append(normalized_result)
+        elif kind == 'block':
+            block_text = ''
+            for idx, line in enumerate(pdf_metadata.lines):
+                line_text = line.text 
+                line_text = normalize_paragraph_text(line_text)
+                if line_text == '':
+                    continue
+                block_text += line_text
+                if idx != len(pdf_metadata.lines) - 1:
+                    block_text += "\n"
+            block_text.strip()
+            segment.text = block_text
+            normalized_result = NormalizedResult(
+                extracted_segment = segment,
+                diagnostic = diagnostic,
+                pdf_metadata = pdf_metadata
+            )
+            if block_text != "":
+                normalized_results.append(normalized_result)
+
+          
+    return normalized_results 

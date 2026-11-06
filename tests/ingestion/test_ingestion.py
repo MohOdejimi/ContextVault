@@ -376,7 +376,7 @@ def test_scanned_pdf_extraction_without_tesseract(client: TestClient, db_session
 
     assert extract_segments_from_document_by_worker(file_bytes, document_metadata) is not None
 
-def test__pdf_with_text_and_image_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
+def test_pdf_with_text_and_image_extraction(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
     email, password = user_registration_helper(client)
     token = user_login_helper(client, email, password)
 
@@ -578,6 +578,47 @@ def test_docx_file_normalization(client: TestClient, db_session: Session, mock_s
             headers={"Authorization": f"Bearer {token}"},
             files = {
                 "file": (test_docx_file.name, f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            }
+        )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = db_session.scalar(
+        select(User)
+        .where(User.email == email.lower())
+    )
+    assert user is not None
+
+    document = db_session.scalar(
+        select(Document)
+        .where(Document.user_id == user.id)
+    )
+    assert document is not None 
+
+    job = claim_one_job(TestSessionLocal)
+    assert job is not None 
+
+    document_metadata = load_document_metadata(document.id, TestSessionLocal)
+    assert document_metadata is not None 
+
+    file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
+    assert file_bytes is not None 
+
+    extracted_results = extract_segments_from_document_by_worker(file_bytes, document_metadata)
+    assert extracted_results is not None 
+
+    normalized_segments = normalize_segments_by_worker(extracted_results)
+    assert normalized_segments is not None
+
+def test_pdf_file_normalization(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client,  email, password)
+
+    with open(test_pdf_file, "rb") as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files = {
+                "file": (test_pdf_file.name, f, "application/pdf")
             }
         )
 
