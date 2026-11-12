@@ -12,6 +12,7 @@ from app.services.document_metadata import load_document
 from app.services.document_storage import get_raw_file_bytes
 from app.services.document_extraction import extract_segments_from_document
 from app.services.document_normalization import normalize_extraction_results
+from app.services.document_chunking import prepare_content_units
 from app.storage.s3 import get_s3_client
 from app.core.database.connection import SessionLocal 
 from app.core.config import S3_BUCKET_NAME
@@ -89,3 +90,9 @@ def normalize_segments_by_worker(
 ):
     normalized_segments =  normalize_extraction_results(extracted_results)
     return normalized_segments
+
+def prepare_content_units_by_worker(
+    normalized_segments
+):
+    prepared_units = prepare_content_units(normalized_segments)
+    return prepared_units

@@ -43,12 +43,11 @@ def normalize_list(text: str) -> str:
     return normalized_list
 
 def normalize_code_block(code_block: str) -> str:
-    code_block = re.replace('\x00', '')
     lines = code_block.splitlines()
     normalized = '\n'.join(lines)
 
     return normalized
-
+ 
 
 def normalize_extraction_results(extracted_result: list[ExtractionResult]): 
     normalized_results : list[NormalizedResult] = []
