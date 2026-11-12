@@ -8,7 +8,6 @@ from .document_extraction import ExtractionResult
 from .document_extraction import SourceLocation
 
 
-@dataclass 
 class NormalizedResult(ExtractionResult):
     pass
 

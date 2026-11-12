@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import DatabaseError
+from transformers import AutoTokenizer
 
 from app.services.ingestion_jobs import claim_pending_job
 from app.services.document_metadata import load_document
@@ -17,6 +18,7 @@ from app.core.config import S3_BUCKET_NAME
 
 
 logger = logging.getLogger(__name__)
+tokenizer = AutoTokenizer.from_pretrained('BAAI/bge-small-en-v1.5')    
 
 @dataclass
 class JobData:

@@ -24,6 +24,11 @@ def claim_pending_job(db: Session):
             job.created_at = func.now()
             job.lease_expires_at = func.now() + text("Interval '7 minutes'")
 
+            db.commit()
+
+        # Check for expired jobs and reset their status to 'pending'
+
         return job
     except Exception as e:
+        db.rollback()
         raise
