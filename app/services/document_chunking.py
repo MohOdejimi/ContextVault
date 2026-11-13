@@ -1,8 +1,11 @@
 from dataclasses import dataclass
 from typing import Optional
+from logging import getLogger
 
 from .document_extraction import SourceLocation, PDFBlockMetaData
 from .document_normalization import NormalizedResult
+
+logger = getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -163,3 +166,80 @@ def prepare_content_units(
         prepared_units.append(unit)
 
     return prepared_units
+
+
+HARD_MAXIMUM = 600 
+TARGET_CHUNK_SIZE = 500
+OVERLAP_TOKENS = 75
+
+def token_assembler(prepared_units: list[PreparedContentUnit], document_id: int, tokenizer) -> list[DocumentChunk]:
+    document_chunks: list[DocumentChunk] = []
+    current_chunk_text = ""
+    source_fragments: list[ChunkSource] = []
+    current_token_count = 0
+    chunk_index = 0
+    for unit in prepared_units:
+        text = unit.text
+        separator = unit.separator_before
+        if current_chunk_text == "":
+            current_chunk_text = text
+            source_fragment = ChunkSource(
+                source_location=unit.source.source_location,
+                origin_field=unit.source.origin_field,
+                start_char=unit.source.start_char,
+                end_char=unit.source.end_char,
+                page_number=unit.source.page_number,
+                pdf_metadata=unit.source.pdf_metadata
+            )
+            current_token_count += len(tokenizer.encode(text))
+            if current_token_count < TARGET_CHUNK_SIZE:
+                source_fragments.append(source_fragment)
+            else:
+                if current_token_count > HARD_MAXIMUM:
+                    logger.warning("Chunk size exceeded hard maximum for document %s, chunk %s", document_id, chunk_index)
+
+                document_chunk = DocumentChunk(
+                    document_id=document_id,
+                    chunk_index=chunk_index,
+                    text=text,
+                    token_count=current_token_count,
+                    sources=source_fragments
+                )
+                document_chunks.append(document_chunk)
+                source_fragments = []
+                chunk_index += 1
+                current_chunk_text = ""
+                current_token_count = 0
+        else:
+            candidate_text = current_chunk_text + separator + text 
+            candidate_token_count = len(tokenizer.encode(candidate_text))
+            source_fragment = ChunkSource(
+                source_location=unit.source.source_location,
+                origin_field=unit.source.origin_field,
+                start_char=unit.source.start_char,
+                end_char=unit.source.end_char,
+                page_number=unit.source.page_number,
+                pdf_metadata=unit.source.pdf_metadata
+            )
+            current_token_count += candidate_token_count
+            if current_token_count < TARGET_CHUNK_SIZE:
+                source_fragments.append(source_fragment)
+                current_chunk_text += candidate_text
+            else:
+                if current_token_count > HARD_MAXIMUM:
+                    logger.warning("Chunk size exceeded hard maximum for document %s, chunk %s", document_id, chunk_index)
+                document_chunk = DocumentChunk(
+                    document_id=document_id,
+                    chunk_index=chunk_index,
+                    text=current_chunk_text,
+                    token_count=current_token_count - candidate_token_count,
+                    sources=source_fragments
+                )
+                document_chunks.append(document_chunk)
+                source_fragments = []
+                chunk_index += 1
+                current_chunk_text = ""
+                current_token_count = 0
+
+    return document_chunks
+

@@ -8,11 +8,20 @@ from sqlalchemy import select, update
 from fastapi.testclient import TestClient
 from fastapi import status
 
-from app.workers.ingestion_worker import claim_one_job, load_document_metadata, obtain_file_bytes, extract_segments_from_document_by_worker, normalize_segments_by_worker
+
 from tests.test_database import TestSessionLocal
 from app.auth.models import User 
 from app.models import IngestionJob, Document, IngestionJobStatus
 from app.services.document_extraction import CorruptFileError, EmptyDocumentError
+from app.workers.ingestion_worker import (
+    claim_one_job, 
+    load_document_metadata, 
+    obtain_file_bytes, 
+    extract_segments_from_document_by_worker, 
+    normalize_segments_by_worker,
+    prepare_content_units_by_worker,
+    token_assembler_by_worker
+)
 
 
 uploads_dir = Path(__file__).resolve().parents[1] / "upload"
@@ -650,3 +659,183 @@ def test_pdf_file_normalization(client: TestClient, db_session: Session, mock_s3
 
     normalized_segments = normalize_segments_by_worker(extracted_results)
     assert normalized_segments is not None
+
+def test_pdf_file_prepared_units(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client,  email, password)
+
+    with open(test_pdf_file, "rb") as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files = {
+                "file": (test_pdf_file.name, f, "application/pdf")
+            }
+        )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = db_session.scalar(
+        select(User)
+        .where(User.email == email.lower())
+    )
+    assert user is not None
+
+    document = db_session.scalar(
+        select(Document)
+        .where(Document.user_id == user.id)
+    )
+    assert document is not None 
+
+    job = claim_one_job(TestSessionLocal)
+    assert job is not None 
+
+    document_metadata = load_document_metadata(document.id, TestSessionLocal)
+    assert document_metadata is not None 
+
+    file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
+    assert file_bytes is not None 
+
+    extracted_results = extract_segments_from_document_by_worker(file_bytes, document_metadata)
+    assert extracted_results is not None 
+
+    normalized_segments = normalize_segments_by_worker(extracted_results)
+    assert normalized_segments is not None
+
+    prepared_units = prepare_content_units_by_worker(normalized_segments)
+    assert prepared_units is not None
+
+def test_pdf_file_prepared_units(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client,  email, password)
+
+    with open(test_pdf_file, "rb") as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files = {
+                "file": (test_pdf_file.name, f, "application/pdf")
+            }
+        )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = db_session.scalar(
+        select(User)
+        .where(User.email == email.lower())
+    )
+    assert user is not None
+
+    document = db_session.scalar(
+        select(Document)
+        .where(Document.user_id == user.id)
+    )
+    assert document is not None 
+
+    job = claim_one_job(TestSessionLocal)
+    assert job is not None 
+
+    document_metadata = load_document_metadata(document.id, TestSessionLocal)
+    assert document_metadata is not None 
+
+    file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
+    assert file_bytes is not None 
+
+    extracted_results = extract_segments_from_document_by_worker(file_bytes, document_metadata)
+    assert extracted_results is not None 
+
+    normalized_segments = normalize_segments_by_worker(extracted_results)
+    assert normalized_segments is not None
+
+    prepared_units = prepare_content_units_by_worker(normalized_segments)
+    assert prepared_units is not None
+
+
+def test_md_file_prepared_units(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client,  email, password)
+
+    with open(test_md_file, "rb") as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files = {
+                "file": (test_md_file.name, f, "text/markdown")
+            }
+        )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = db_session.scalar(
+        select(User)
+        .where(User.email == email.lower())
+    )
+    assert user is not None
+
+    document = db_session.scalar(
+        select(Document)
+        .where(Document.user_id == user.id)
+    )
+    assert document is not None 
+
+    job = claim_one_job(TestSessionLocal)
+    assert job is not None 
+
+    document_metadata = load_document_metadata(document.id, TestSessionLocal)
+    assert document_metadata is not None 
+
+    file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
+    assert file_bytes is not None 
+
+    extracted_results = extract_segments_from_document_by_worker(file_bytes, document_metadata)
+    assert extracted_results is not None 
+
+    normalized_segments = normalize_segments_by_worker(extracted_results)
+    assert normalized_segments is not None
+
+    prepared_units = prepare_content_units_by_worker(normalized_segments)
+    assert prepared_units is not None
+
+def test_md_file_chunk_units(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
+    email, password = user_registration_helper(client)
+    token = user_login_helper(client,  email, password)
+
+    with open(test_md_file, "rb") as f:
+        response = client.post('/document',
+            headers={"Authorization": f"Bearer {token}"},
+            files = {
+                "file": (test_md_file.name, f, "text/markdown")
+            }
+        )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = db_session.scalar(
+        select(User)
+        .where(User.email == email.lower())
+    )
+    assert user is not None
+
+    document = db_session.scalar(
+        select(Document)
+        .where(Document.user_id == user.id)
+    )
+    assert document is not None 
+
+    job = claim_one_job(TestSessionLocal)
+    assert job is not None 
+
+    document_metadata = load_document_metadata(document.id, TestSessionLocal)
+    assert document_metadata is not None 
+
+    file_bytes = obtain_file_bytes(document_metadata.s3_key, mock_s3_client)
+    assert file_bytes is not None 
+
+    extracted_results = extract_segments_from_document_by_worker(file_bytes, document_metadata)
+    assert extracted_results is not None 
+
+    normalized_segments = normalize_segments_by_worker(extracted_results)
+    assert normalized_segments is not None
+
+    prepared_units = prepare_content_units_by_worker(normalized_segments)
+    assert prepared_units is not None
+
+    assembled_tokens = token_assembler_by_worker(prepared_units, document.id)
+    assert assembled_tokens is not None
