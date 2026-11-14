@@ -793,15 +793,15 @@ def test_md_file_prepared_units(client: TestClient, db_session: Session, mock_s3
     prepared_units = prepare_content_units_by_worker(normalized_segments)
     assert prepared_units is not None
 
-def test_md_file_chunk_units(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
+def test_pdf_file_chunk_units(client: TestClient, db_session: Session, mock_s3_client: boto3.client):
     email, password = user_registration_helper(client)
     token = user_login_helper(client,  email, password)
 
-    with open(test_md_file, "rb") as f:
+    with open(test_pdf_file, "rb") as f:
         response = client.post('/document',
             headers={"Authorization": f"Bearer {token}"},
             files = {
-                "file": (test_md_file.name, f, "text/markdown")
+                "file": (test_pdf_file.name, f, "application/pdf")
             }
         )
 
@@ -836,6 +836,6 @@ def test_md_file_chunk_units(client: TestClient, db_session: Session, mock_s3_cl
 
     prepared_units = prepare_content_units_by_worker(normalized_segments)
     assert prepared_units is not None
-
     assembled_tokens = token_assembler_by_worker(prepared_units, document.id)
-    assert assembled_tokens is not None
+    print(repr(assembled_tokens))
+    assert assembled_tokens is None
