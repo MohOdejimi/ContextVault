@@ -19,7 +19,7 @@ from app.core.config import S3_BUCKET_NAME
 
 
 logger = logging.getLogger(__name__)
-tokenizer = AutoTokenizer.from_pretrained('BAAI/bge-small-en-v1.5')    
+tokenizer = AutoTokenizer.from_pretrained('BAAI/bge-base-en-v1.5')    
 
 @dataclass
 class JobData:

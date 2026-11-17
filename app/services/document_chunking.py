@@ -37,6 +37,7 @@ class DocumentChunk:
     sources: list[ChunkSource]
 
 
+
 def _get_separator(kind: str) -> str:
     """
     Determines how adjacent prepared units should be joined.
@@ -168,9 +169,9 @@ def prepare_content_units(
     return prepared_units
 
 
-HARD_MAXIMUM = 600 
-TARGET_CHUNK_SIZE = 500
-OVERLAP_TOKENS = 75
+HARD_MAXIMUM = 480 
+TARGET_CHUNK_SIZE = 350
+OVERLAP_TOKENS = 30
 
 def token_assembler(prepared_units: list[PreparedContentUnit], document_id: int, tokenizer) -> list[DocumentChunk]:
     document_chunks: list[DocumentChunk] = []
@@ -178,11 +179,14 @@ def token_assembler(prepared_units: list[PreparedContentUnit], document_id: int,
     source_fragments: list[ChunkSource] = []
     current_token_count = 0
     chunk_index = 0
+    emitted = False
     for unit in prepared_units:
         text = unit.text
         separator = unit.separator_before
-        if current_chunk_text == "":
+        if current_chunk_text == "" and not emitted:
             current_chunk_text = text
+            current_token_count = len(tokenizer.encode(text)) 
+
             source_fragment = ChunkSource(
                 source_location=unit.source.source_location,
                 origin_field=unit.source.origin_field,
@@ -191,27 +195,43 @@ def token_assembler(prepared_units: list[PreparedContentUnit], document_id: int,
                 page_number=unit.source.page_number,
                 pdf_metadata=unit.source.pdf_metadata
             )
-            current_token_count += len(tokenizer.encode(text))
-            if current_token_count < TARGET_CHUNK_SIZE:
-                source_fragments.append(source_fragment)
-            else:
-                if current_token_count > HARD_MAXIMUM:
-                    logger.warning("Chunk size exceeded hard maximum for document %s, chunk %s", document_id, chunk_index)
 
-                document_chunk = DocumentChunk(
-                    document_id=document_id,
-                    chunk_index=chunk_index,
-                    text=text,
-                    token_count=current_token_count,
-                    sources=source_fragments
-                )
-                document_chunks.append(document_chunk)
-                source_fragments = []
-                chunk_index += 1
-                current_chunk_text = current_chunk_text + separator + text
+            source_fragments.append(source_fragment)
+            if current_token_count <= TARGET_CHUNK_SIZE or unit.keep_with_next == True:
+                current_chunk_text = current_chunk_text +  separator
                 current_token_count = len(tokenizer.encode(current_chunk_text))
+                continue
+            if current_token_count > HARD_MAXIMUM:
+                logger.warning("Chunk size exceeded hard maximum for document %s, chunk %s", document_id, chunk_index)
+                # Recursive text split character and append each split fragement to the document_chunks list
+
+            document_chunk = DocumentChunk(
+                document_id=document_id,
+                chunk_index=chunk_index,
+                text=current_chunk_text,
+                token_count=current_token_count,
+                sources=source_fragments
+            )  
+            emitted = True
+            current_chunk_tokens = tokenizer.encode(current_chunk_text)
+            overlap_tokens = current_chunk_tokens[-OVERLAP_TOKENS:] if len(current_chunk_tokens) > OVERLAP_TOKENS else current_chunk_tokens
+            decoded_overlap_tokens = tokenizer.decode(overlap_tokens)
+
+            if len(document_chunks) > 0:
+                document_chunks.append(document_chunk)
+                current_chunk_text = decoded_overlap_tokens + separator + text
+                source_fragments = []
+            else:
+                document_chunks.append(document_chunk)
+                current_chunk_text = decoded_overlap_tokens
+                source_fragments = []
+
+            chunk_index += 1  
+            current_token_count = len(tokenizer.encode(current_chunk_text))
+            if current_token_count > HARD_MAXIMUM:
+                logger.warning("Chunk size exceeded hard maximum for document %s, chunk %s", document_id, chunk_index)  
         else:
-            candidate_text = current_chunk_text + separator + text 
+            candidate_text = current_chunk_text + separator + text
             candidate_token_count = len(tokenizer.encode(candidate_text))
             source_fragment = ChunkSource(
                 source_location=unit.source.source_location,
@@ -221,28 +241,41 @@ def token_assembler(prepared_units: list[PreparedContentUnit], document_id: int,
                 page_number=unit.source.page_number,
                 pdf_metadata=unit.source.pdf_metadata
             )
-            if candidate_token_count < TARGET_CHUNK_SIZE:
-                source_fragments.append(source_fragment)
+
+            source_fragments.append(source_fragment)
+
+            if candidate_token_count <= TARGET_CHUNK_SIZE or unit.keep_with_next == True:
                 current_chunk_text = candidate_text
                 current_token_count = candidate_token_count
-            else:
-                if current_token_count > HARD_MAXIMUM:
-                    logger.warning("Chunk size exceeded hard maximum for document %s, chunk %s", document_id, chunk_index)
-                document_chunk = DocumentChunk(
-                    document_id=document_id,
-                    chunk_index=chunk_index,
-                    text=current_chunk_text,
-                    token_count=current_token_count,
-                    sources=source_fragments
-                )
+                continue
+            emitted = True
+            if current_token_count > HARD_MAXIMUM:
+                logger.warning("Chunk size exceeded hard maximum for document %s, chunk %s", document_id, chunk_index)
+            document_chunk = DocumentChunk(
+                document_id=document_id,
+                chunk_index=chunk_index,
+                text=current_chunk_text,
+                token_count=current_token_count,
+                sources=source_fragments
+            )
+
+            current_chunk_tokens = tokenizer.encode(current_chunk_text)
+            overlap_tokens = current_chunk_tokens[-OVERLAP_TOKENS:] if len(current_chunk_tokens) > OVERLAP_TOKENS else current_chunk_tokens
+            decoded_overlap_tokens = tokenizer.decode(overlap_tokens)
+
+            if len(document_chunks) > 0:
                 document_chunks.append(document_chunk)
-                current_chunk_tokens = tokenizer.encode(current_chunk_text)
-                overlap_tokens = current_chunk_tokens[-OVERLAP_TOKENS:] if len(current_chunk_tokens) > OVERLAP_TOKENS else current_chunk_tokens
-                decoded_overlap_tokens = tokenizer.decode(overlap_tokens)
-                source_fragments = []
-                chunk_index += 1
                 current_chunk_text = decoded_overlap_tokens + separator + text
-                current_token_count = len(tokenizer.encode(current_chunk_text))
+                source_fragments = []
+            else:
+                document_chunks.append(document_chunk)
+                current_chunk_text = decoded_overlap_tokens
+                source_fragments = []
+            chunk_index += 1  
+            current_token_count = len(tokenizer.encode(current_chunk_text))
+
+            if current_token_count > HARD_MAXIMUM:
+                logger.warning("Chunk size exceeded hard maximum for document %s, chunk %s", document_id, chunk_index)
 
     if current_chunk_text:
         if current_token_count > HARD_MAXIMUM:
