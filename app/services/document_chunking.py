@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 from logging import getLogger
+from transformers import PreTrainedTokenizer
 
 from .document_extraction import SourceLocation, PDFBlockMetaData
 from .document_normalization import NormalizedResult
@@ -36,6 +37,11 @@ class DocumentChunk:
     token_count: int
     sources: list[ChunkSource]
 
+@dataclass
+class ProvenanceMapping:
+    chunk_start: int
+    chunk_end: int
+    source: ChunkSource
 
 
 def _get_separator(kind: str) -> str:
@@ -173,19 +179,33 @@ HARD_MAXIMUM = 480
 TARGET_CHUNK_SIZE = 350
 OVERLAP_TOKENS = 30
 
-def token_assembler(prepared_units: list[PreparedContentUnit], document_id: int, tokenizer) -> list[DocumentChunk]:
+
+
+def token_assembler(prepared_units: list[PreparedContentUnit], document_id: int, tokenizer: PreTrainedTokenizer) -> list[DocumentChunk]:
     document_chunks: list[DocumentChunk] = []
+    provenance_mapping = []
     current_chunk_text = ""
     source_fragments: list[ChunkSource] = []
     current_token_count = 0
     chunk_index = 0
     emitted = False
+
     for unit in prepared_units:
         text = unit.text
         separator = unit.separator_before
+        unit_text_len = len(text)
+
         if current_chunk_text == "" and not emitted:
             current_chunk_text = text
-            current_token_count = len(tokenizer.encode(text)) 
+            encoding = tokenizer(
+                text,
+                return_offsets_mapping=True,
+                add_special_tokens=False
+            )
+            token_ids = encoding["input_ids"]
+            offsets = encoding["offset_mapping"]
+
+            current_token_count = len(token_ids)
 
             source_fragment = ChunkSource(
                 source_location=unit.source.source_location,
@@ -197,9 +217,10 @@ def token_assembler(prepared_units: list[PreparedContentUnit], document_id: int,
             )
 
             source_fragments.append(source_fragment)
-            if current_token_count <= TARGET_CHUNK_SIZE or unit.keep_with_next == True:
-                current_chunk_text = current_chunk_text +  separator
-                current_token_count = len(tokenizer.encode(current_chunk_text))
+            if unit.keep_with_next == True and current_chunk_text != '':
+                current_chunk_text = text
+                continue
+            if current_token_count <= TARGET_CHUNK_SIZE:
                 continue
             if current_token_count > HARD_MAXIMUM:
                 logger.warning("Chunk size exceeded hard maximum for document %s, chunk %s", document_id, chunk_index)
@@ -213,26 +234,68 @@ def token_assembler(prepared_units: list[PreparedContentUnit], document_id: int,
                 sources=source_fragments
             )  
             emitted = True
-            current_chunk_tokens = tokenizer.encode(current_chunk_text)
-            overlap_tokens = current_chunk_tokens[-OVERLAP_TOKENS:] if len(current_chunk_tokens) > OVERLAP_TOKENS else current_chunk_tokens
-            decoded_overlap_tokens = tokenizer.decode(overlap_tokens)
+            encoding = tokenizer(
+                    current_chunk_text,
+                    return_offsets_mapping=True,
+                    add_special_tokens=False
+            )
+  
+            offsets = encoding["offset_mapping"]
+            overlap_offsets = offsets[-OVERLAP_TOKENS:] if len(offsets) > OVERLAP_TOKENS else offsets
+            overlap_offset_start = overlap_offsets[0][0]
+            overlap_offset_end = overlap_offsets[-1][1]
+            overlap_text = current_chunk_text[overlap_offset_start:overlap_offset_end]
 
-            if len(document_chunks) > 0:
-                document_chunks.append(document_chunk)
-                current_chunk_text = decoded_overlap_tokens + separator + text
-                source_fragments = []
-            else:
-                document_chunks.append(document_chunk)
-                current_chunk_text = decoded_overlap_tokens
-                source_fragments = []
+            document_chunks.append(document_chunk)
+            current_chunk_text = overlap_text
+            source_fragments.clear()
+            for provenance in provenance_mapping:
+                provenance_chunk_start = provenance.chunk_start
+                provenance_chunk_end = provenance.chunk_end
+                intersection_start = max(provenance_chunk_start, overlap_offset_start)
+                intersection_end = min(provenance_chunk_end, overlap_offset_end)
+                if intersection_start < intersection_end:
+                    source_start = provenance.source.start_char + (intersection_start - provenance_chunk_start)
+                    source_end = provenance.source.start_char + (intersection_end - provenance_chunk_start)
+                    source_fragment = ChunkSource(
+                        source_location=provenance.source.source_location,
+                        origin_field=provenance.source.origin_field,
+                        start_char=source_start,
+                        end_char=source_end,
+                        page_number=provenance.source.page_number,
+                        pdf_metadata=provenance.source.pdf_metadata
+                    )
+                    source_fragments.append(source_fragment)
 
+            provenance_mapping.clear()
+
+            for fragment in source_fragments:
+                provenance = ProvenanceMapping(
+                    chunk_start=fragment.start_char,
+                    chunk_end=fragment.end_char,
+                    source=fragment
+                )
+                provenance_mapping.append(provenance)
+                
             chunk_index += 1  
-            current_token_count = len(tokenizer.encode(current_chunk_text))
+            encoding = tokenizer(
+                current_chunk_text,
+                return_offsets_mapping=True,
+                add_special_tokens=False
+            )
+            current_token_count = len(encoding["input_ids"])
             if current_token_count > HARD_MAXIMUM:
                 logger.warning("Chunk size exceeded hard maximum for document %s, chunk %s", document_id, chunk_index)  
         else:
             candidate_text = current_chunk_text + separator + text
-            candidate_token_count = len(tokenizer.encode(candidate_text))
+            current_chunk_len = len(current_chunk_text)
+
+            encoding = tokenizer(
+                candidate_text,
+                return_offsets_mapping=True,
+                add_special_tokens=False
+            )
+
             source_fragment = ChunkSource(
                 source_location=unit.source.source_location,
                 origin_field=unit.source.origin_field,
@@ -242,37 +305,115 @@ def token_assembler(prepared_units: list[PreparedContentUnit], document_id: int,
                 pdf_metadata=unit.source.pdf_metadata
             )
 
-            source_fragments.append(source_fragment)
+            unit_mapping = []
+            offset = encoding['offset_mapping']
+            candidate_token_ids = encoding["input_ids"]
+            candidate_token_count = len(candidate_token_ids)
 
-            if candidate_token_count <= TARGET_CHUNK_SIZE or unit.keep_with_next == True:
+            for mapping in offset:
+                map_start = mapping[0]
+                map_end = mapping[1]
+
+                if map_start > (current_chunk_len + len(separator)):
+                    unit_mapping.append((map_start, map_end))
+
+            if unit_mapping:
+                unit_start = unit_mapping[0][0]
+                unit_end = unit_mapping[-1][1]
+
+                provenance = ProvenanceMapping(
+                    chunk_start=unit_start,
+                    chunk_end=unit_end,
+                    source=source_fragment
+                )
+
+                provenance_mapping.append(provenance)
+
+            if unit.keep_with_next == True:
+                encoding = tokenizer(
+                    current_chunk_text,
+                    return_offsets_mapping=True,
+                    add_special_tokens=False
+                )
+                document_chunk = DocumentChunk(
+                    document_id=document_id,
+                    chunk_index=chunk_index,
+                    text=current_chunk_text,
+                    token_count=current_token_count,
+                    sources=source_fragments 
+                )
+                document_chunks.append(document_chunk)
+                chunk_index += 1
+                current_chunk_text = text 
+                encoding = tokenizer(
+                    current_chunk_text,
+                    return_offsets_mapping=True,
+                    add_special_tokens=False
+                )
+                current_token_count = len(encoding["input_ids"])
+                source_fragments.clear()
+                source_fragments.append(source_fragment)
+                continue
+
+            if candidate_token_count <= TARGET_CHUNK_SIZE:
+                source_fragments.append(source_fragment)
                 current_chunk_text = candidate_text
                 current_token_count = candidate_token_count
                 continue
             emitted = True
-            if current_token_count > HARD_MAXIMUM:
+            if candidate_token_count > HARD_MAXIMUM:
                 logger.warning("Chunk size exceeded hard maximum for document %s, chunk %s", document_id, chunk_index)
             document_chunk = DocumentChunk(
                 document_id=document_id,
                 chunk_index=chunk_index,
-                text=current_chunk_text,
-                token_count=current_token_count,
-                sources=source_fragments
+                text=candidate_text,
+                token_count=candidate_token_count,
+                sources=source_fragments + [source_fragment]
             )
 
-            current_chunk_tokens = tokenizer.encode(current_chunk_text)
-            overlap_tokens = current_chunk_tokens[-OVERLAP_TOKENS:] if len(current_chunk_tokens) > OVERLAP_TOKENS else current_chunk_tokens
-            decoded_overlap_tokens = tokenizer.decode(overlap_tokens)
+            overlap_offsets = offset[-OVERLAP_TOKENS:] if len(offset) > OVERLAP_TOKENS else offset
+            overlap_offset_start = overlap_offsets[0][0]
+            overlap_offset_end = overlap_offsets[-1][1]
+            overlap_text = candidate_text[overlap_offset_start:overlap_offset_end]
 
-            if len(document_chunks) > 0:
-                document_chunks.append(document_chunk)
-                current_chunk_text = decoded_overlap_tokens + separator + text
-                source_fragments = []
-            else:
-                document_chunks.append(document_chunk)
-                current_chunk_text = decoded_overlap_tokens
-                source_fragments = []
+            document_chunks.append(document_chunk)
+            current_chunk_text = overlap_text
+            source_fragments.clear()
+            for provenance in provenance_mapping:
+                provenance_chunk_start = provenance.chunk_start
+                provenance_chunk_end = provenance.chunk_end
+                intersection_start = max(provenance_chunk_start, overlap_offset_start)
+                intersection_end = min(provenance_chunk_end, overlap_offset_end)
+                if intersection_start < intersection_end:
+                    source_start = provenance.source.start_char + (intersection_start - provenance_chunk_start)
+                    source_end = provenance.source.start_char + (intersection_end - provenance_chunk_start)
+                    source_fragment = ChunkSource(
+                        source_location=provenance.source.source_location,
+                        origin_field=provenance.source.origin_field,
+                        start_char=source_start,
+                        end_char=source_end,
+                        page_number=provenance.source.page_number,
+                        pdf_metadata=provenance.source.pdf_metadata
+                    )
+                    source_fragments.append(source_fragment)
+
+            provenance_mapping.clear()
+            for fragment in source_fragments:
+                provenance = ProvenanceMapping(
+                    chunk_start=fragment.start_char,
+                    chunk_end=fragment.end_char,
+                    source=fragment
+                )
+                provenance_mapping.append(provenance)
+
             chunk_index += 1  
-            current_token_count = len(tokenizer.encode(current_chunk_text))
+
+            encoding = tokenizer(
+                current_chunk_text,
+                return_offsets_mapping=True,
+                add_special_tokens=False
+            )
+            current_token_count = len(encoding["input_ids"])
 
             if current_token_count > HARD_MAXIMUM:
                 logger.warning("Chunk size exceeded hard maximum for document %s, chunk %s", document_id, chunk_index)
